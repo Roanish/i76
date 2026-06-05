@@ -1,0 +1,41 @@
+# Build artifacts
+build/
+*.o
+*.a
+
+# Compiled binaries
+i76
+tools/zfs_dump
+tools/smk_dump
+tools/asset_browser
+
+# Generated shader headers
+shaders_gen/
+
+# Game assets — copyrighted, not redistributable.
+# Users must supply their own copy of Interstate '76 Nitro Pack.
+*.zfs
+*.zix
+*.fnt
+*.smk
+*.SMK
+*.pcx
+*.PCX
+miss8/
+miss16/
+smk/
+addon/
+upscale/
+
+# Research notes — exclude extracted game files and screenshots
+lib/Notes/hoppers guide/files/
+lib/Notes/hoppers guide/*.gif
+lib/Notes/hoppers guide/*.bmp
+lib/Notes/hoppers guide/*.GIF
+lib/Notes/hoppers guide/*.BMP
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+*~

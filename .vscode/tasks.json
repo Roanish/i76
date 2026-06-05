@@ -1,0 +1,140 @@
+{
+    // .vscode/tasks.json
+    // Build tasks for the i76 rewrite project.
+    // Uses CMake + GCC via the terminal. No Microsoft C++ extension required —
+    // works with the OSS build of VS Code (VSCodium or code-oss).
+    //
+    // REQUIRES (will be checked by the "Check Dependencies" task):
+    //   gcc or clang
+    //   cmake >= 3.16
+    //   libsdl2-dev
+    //   make
+    //
+    // Install on Ubuntu/Debian:
+    //   sudo apt install build-essential cmake libsdl2-dev
+    "version": "2.0.0",
+    "tasks": [
+
+        // ----------------------------------------------------------------
+        // Check that required tools are installed before trying to build.
+        // Run this first if you're setting up a new machine.
+        // ----------------------------------------------------------------
+        {
+            "label": "Check Dependencies",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "echo '=== Checking build dependencies ===' && echo -n 'gcc:    ' && (which gcc    && gcc --version    | head -1) || echo 'MISSING — sudo apt install build-essential' && echo -n 'cmake:  ' && (which cmake  && cmake --version  | head -1) || echo 'MISSING — sudo apt install cmake' && echo -n 'make:   ' && (which make   && make --version   | head -1) || echo 'MISSING — sudo apt install build-essential' && echo -n 'SDL2:   ' && (pkg-config --modversion sdl2 && echo '(found)') || echo 'MISSING — sudo apt install libsdl2-dev' && echo '=== Done ==='"
+            ],
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+
+        // ----------------------------------------------------------------
+        // Configure — run cmake to generate build files.
+        // Only needs to run once, or after CMakeLists.txt changes.
+        // ----------------------------------------------------------------
+        {
+            "label": "CMake Configure",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-S", "${workspaceFolder}",
+                "-B", "${workspaceFolder}/build",
+                "-DCMAKE_BUILD_TYPE=Debug",
+                "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+            ],
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+
+        // ----------------------------------------------------------------
+        // Build — compile everything.
+        // Depends on Configure so cmake generates files first if missing.
+        // ----------------------------------------------------------------
+        {
+            "label": "Build",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build", "${workspaceFolder}/build",
+                "--parallel"
+            ],
+            "dependsOn": "CMake Configure",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            // GCC/Clang error format so VS Code underlines errors in source
+            "problemMatcher": ["$gcc"]
+        },
+
+        // ----------------------------------------------------------------
+        // Clean — remove build artifacts.
+        // ----------------------------------------------------------------
+        {
+            "label": "Clean",
+            "type": "shell",
+            "command": "rm",
+            "args": ["-rf", "${workspaceFolder}/build"],
+            "group": "none",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+
+        // ----------------------------------------------------------------
+        // Rebuild — clean then build from scratch.
+        // ----------------------------------------------------------------
+        {
+            "label": "Rebuild",
+            "dependsOn": ["Clean", "Build"],
+            "dependsOrder": "sequence",
+            "group": "none",
+            "problemMatcher": []
+        },
+
+        // ----------------------------------------------------------------
+        // Run — build then launch the binary.
+        // Runs from the project root so relative asset paths work
+        // (the game will eventually look for addon\, lang.txt, etc. here).
+        // ----------------------------------------------------------------
+        {
+            "label": "Run",
+            "type": "shell",
+            "command": "${workspaceFolder}/i76",
+            "dependsOn": "Build",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            },
+            "problemMatcher": []
+        }
+    ]
+}

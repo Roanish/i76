@@ -1,0 +1,28 @@
+{
+    // .vscode/extensions.json
+    // Recommended extensions for this project.
+    // VS Code will prompt to install these when you open the folder.
+    //
+    // All of these are available on the Open VSX registry (open-vsx.org)
+    // which is what VS Code OSS / VSCodium uses instead of the Microsoft
+    // marketplace. If you're using standard VS Code, they're on both.
+    "recommendations": [
+        // C language support via clangd (preferred over ms cpptools for OSS)
+        // Provides: IntelliSense, go-to-definition, error underlining
+        // Requires: sudo apt install clangd
+        "llvm-vs-code-extensions.vscode-clangd",
+
+        // GDB/LLDB debugger integration
+        // Provides: breakpoints, watch window, step through code
+        // Requires: sudo apt install gdb
+        "vadimcn.vscode-lldb",
+
+        // CMake language support (syntax highlighting for CMakeLists.txt)
+        "twxs.cmake",
+
+        // CMake tools (optional — configure/build from status bar)
+        // NOTE: the Microsoft version (ms-vscode.cmake-tools) is NOT on
+        // Open VSX. This is an alternative:
+        "ms-vscode.cmake-tools"
+    ]
+}

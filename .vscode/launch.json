@@ -1,0 +1,63 @@
+{
+    // .vscode/launch.json
+    // Debug configuration for the i76 rewrite.
+    //
+    // Uses the C/C++ extension from the Open VSX registry (NOT the Microsoft
+    // marketplace version). Install in VS Code OSS / VSCodium:
+    //   Extension ID: llvm-vs-code-extensions.vscode-clangd
+    //   OR:           vadimcn.vscode-lldb       (for lldb on Linux)
+    //   OR:           webfreak.debug            (GDB, works without ms extension)
+    //
+    // This config uses gdb directly via the "cppdbg" provider which is part
+    // of the ms-vscode.cpptools extension. If you don't have that, use
+    // the "lldb" provider or "gdb" (webfreak.debug). See SETUP.md.
+    //
+    // NOTE: "program" points to the binary in the project root, which is
+    // where CMake puts it (RUNTIME_OUTPUT_DIRECTORY in CMakeLists.txt).
+    // "cwd" is also the project root so asset loading paths work.
+    "version": "0.2.0",
+    "configurations": [
+
+        // ----------------------------------------------------------------
+        // Debug with GDB (most common on Linux)
+        // Requires: sudo apt install gdb
+        // Extension: vadimcn.vscode-lldb OR webfreak.debug
+        // ----------------------------------------------------------------
+        {
+            "name": "Debug (GDB)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/i76",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "preLaunchTask": "Build",
+            "setupCommands": [
+                {
+                    // Pretty-print STL types in watch window
+                    "description": "Enable pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ]
+        },
+
+        // ----------------------------------------------------------------
+        // Debug with LLDB (alternative, if you prefer clang toolchain)
+        // Requires: sudo apt install lldb
+        // Extension: vadimcn.vscode-lldb
+        // ----------------------------------------------------------------
+        {
+            "name": "Debug (LLDB)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/i76",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "Build"
+        }
+    ]
+}
