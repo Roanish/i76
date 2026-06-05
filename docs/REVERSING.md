@@ -12,7 +12,6 @@ Cross-reference with source comments which often go into more detail.
       it has NOT been confirmed by actually reversing that function.
       Every ??? has a "WHY GUESSED" note explaining the reasoning, and
       a "CONFIRM BY" note explaining what would prove or disprove it.
-      Never treat ??? as fact when writing new code — stub, assert, or suggest a ghidra function output instead.
 ```
 
 ---
