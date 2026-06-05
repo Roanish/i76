@@ -2,7 +2,7 @@
 
 A from-scratch reimplementation of Interstate '76 Nitro Pack (Activision, 1997)
 for Linux and modern Windows, using the original binary as a reference via Ghidra
-decompilation. Requires original game assets.
+decompilation. Requires original game assets, I'm using the GOG nitro version.
 
 ## Current Status
 
