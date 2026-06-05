@@ -1,4 +1,4 @@
-# Interstate '76 Nitro Pack — Open Source Rewrite
+# Interstate '76 - Open Source Rewrite - Codename "Vigalante '76"
 
 A from-scratch reimplementation of Interstate '76 Nitro Pack (Activision, 1997)
 for Linux and modern Windows, using the original binary as a reference via Ghidra
