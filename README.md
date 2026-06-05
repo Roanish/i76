@@ -1,8 +1,7 @@
 # Interstate '76 - Open Source Rewrite - Codename "Vigalante '76"
 
 A from-scratch reimplementation of Interstate '76 Nitro Pack (Activision, 1997)
-for Linux and modern Windows, using the original binary as a reference via Ghidra
-decompilation. Requires original game assets, I'm using the GOG nitro version.
+for Linux and modern Windows, Vulkan based and (hopefully) upscaled models and textures. "True" to the original binaries. Requires original game assets, I'm using the GOG nitro version.
 
 ## Current Status
 
