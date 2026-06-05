@@ -110,6 +110,12 @@ i76/
 ./tools/zfs_dump get "/path/to/nitro.zfs" FILENAME.EXT out.bin
 ```
 
+## Credit
+Reach out if you feel like you deserve some credit, this is a deep community and I don't know who is behind many of the resources.
+
+"That Tony" did some excellent work deserialising the game binaries, ZFS and VFS systems, much inspiration came from his work. (2007??)
+David Hopkinson  aka "Hopper" - provided a great insight with his "Hopper's Guide" which delves deep into the model and texture mapping side of things. (1999??)
+
 ## Reversing Notes
 
 See [`docs/REVERSING.md`](docs/REVERSING.md) for everything deduced from the original
