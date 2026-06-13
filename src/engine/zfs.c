@@ -287,3 +287,18 @@ bool zfs_read_into(ZFSHandle *z, const char *name,
     if (cap < out_size) return false;
     return read_entry(z, e, buf, size_out);
 }
+
+/* -----------------------------------------------------------------------
+ * Enumeration (tools)
+ * ----------------------------------------------------------------------- */
+
+int zfs_entry_count(ZFSHandle *z)
+{
+    return z ? z->active_count : 0;
+}
+
+const ZFSEntry *zfs_entry_at(ZFSHandle *z, int i)
+{
+    if (!z || i < 0 || i >= z->active_count) return NULL;
+    return &z->entries[i];
+}

@@ -50,4 +50,12 @@ void *zfs_read(ZFSHandle *z, const char *name, size_t *size_out);
 bool zfs_read_into(ZFSHandle *z, const char *name,
                    void *buf, size_t cap, size_t *size_out);
 
+/*
+ * Enumeration (for tools). Entries are the live (non-deleted) directory
+ * entries, sorted by name (case-insensitive). zfs_entry_at returns NULL for
+ * out-of-range indices. The returned pointer is owned by the handle.
+ */
+int             zfs_entry_count(ZFSHandle *z);
+const ZFSEntry *zfs_entry_at(ZFSHandle *z, int i);
+
 #endif /* ZFS_H */

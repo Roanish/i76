@@ -39,3 +39,6 @@ lib/Notes/hoppers guide/*.BMP
 *.swp
 *.swo
 *~
+
+# Runtime logs
+*.log

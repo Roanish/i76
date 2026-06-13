@@ -25,7 +25,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include "SDL.h"
 
 #include "platform/platform.h"
 #include "engine/gamestate.h"
@@ -34,8 +33,10 @@
 #include "engine/vfs.h"
 #include "engine/strlookup.h"
 #include "engine/pcx.h"
-#include "engine/font.h"
 #include "engine/video.h"
+#include "engine/loop.h"
+#include "engine/meshcache.h"
+#include "engine/meshview.h"
 #include "render/render.h"
 
 /* -----------------------------------------------------------------------
@@ -54,12 +55,7 @@
  * Forward declarations — state handlers
  * ----------------------------------------------------------------------- */
 
-static void state_gameplay_update(void);
 static void state_frontend_update(void);
-static void state_mainmenu_update(void);
-static void state_lobby_update(void);
-static void state_endsession_update(void);
-static void state_missionend_update(void);
 
 /* -----------------------------------------------------------------------
  * Entry point
@@ -77,6 +73,12 @@ int main(int argc, char *argv[])
     CmdlineArgs args;
     cmdline_parse(argc, argv, &args);
 
+    /* --meshview: dev tool — browse decoded OEG meshes instead of running the
+     * game. Handled here (not in cmdline.c) since it's a developer entry point. */
+    bool mesh_view = false;
+    for (int i = 1; i < argc; i++)
+        if (strcmp(argv[i], "--meshview") == 0) mesh_view = true;
+
     /* -------------------------------------------------------------- */
     /* Asset root                                                       */
     /* Mirrors the original's assumption that assets live alongside the */
@@ -88,6 +90,18 @@ int main(int argc, char *argv[])
 
     if (!vfs_init())
         fprintf(stderr, "[main] VFS init failed — ZFS assets unavailable.\n");
+
+    /* -------------------------------------------------------------- */
+    /* Mesh cache                                                       */
+    /* Original: obj_system_init() during session setup. Set up the     */
+    /* GEO mesh cache (dual index + LRU + heap budget) now; meshes are   */
+    /* loaded lazily on first geo_cache_acquire().                       */
+    /* -------------------------------------------------------------- */
+
+    meshcache_init();
+#ifndef NDEBUG
+    meshcache_selftest();
+#endif
 
     /* -------------------------------------------------------------- */
     /* String table                                                     */
@@ -142,55 +156,16 @@ int main(int argc, char *argv[])
     }
 
     /* -------------------------------------------------------------- */
-    /* Font test — remove before ship                                   */
-    /* -------------------------------------------------------------- */
-
-    {
-        static uint8_t fb[WINDOW_WIDTH * WINDOW_HEIGHT];
-        static Rgb8    pal[256];
-        memset(fb,  0, sizeof(fb));
-        memset(pal, 0, sizeof(pal));
-        pal[255] = (Rgb8){255, 255, 255};
-
-        /* Render-path smoke test: white rectangle, no font needed */
-        for (int row = 10; row < 20; row++)
-            for (int col = 10; col < 200; col++)
-                fb[row * WINDOW_WIDTH + col] = 255;
-
-        Font *fnt = font_load("base6x7.fnt");
-        fprintf(stdout, "[main] font_load: %s\n", fnt ? "OK" : "FAILED");
-        fflush(stdout);
-        if (fnt) {
-            const char *lines[] = {
-                "INTERSTATE '76  --  OPEN REWRITE",
-                "font system: OK",
-            };
-            int y = (WINDOW_HEIGHT - (int)(fnt->height * 2 + 4)) / 2;
-            for (int i = 0; i < 2; i++) {
-                int tx = (WINDOW_WIDTH - font_text_width(fnt, lines[i])) / 2;
-                font_draw(fnt, lines[i], fb, WINDOW_WIDTH, WINDOW_HEIGHT,
-                          tx, y, 255);
-                y += (int)fnt->height + 4;
-            }
-            font_free(fnt);
-        }
-
-        render_begin_frame();
-        render_set_palette(pal);
-        render_blit_indexed(fb, WINDOW_WIDTH, WINDOW_HEIGHT);
-        render_end_frame();
-        SDL_Delay(2000);
-    }
-
-    /* -------------------------------------------------------------- */
     /* Intro + credits videos                                           */
     /* Original: video_play(hwnd, "introf01.smk") then                 */
     /*           video_play(hwnd, "credf01.smk") before main loop.     */
     /* Any keypress skips. Not found = silently continue.              */
     /* -------------------------------------------------------------- */
 
-    video_play("smk/introf01.smk");
-    video_play("smk/credf01.smk");
+    if (!mesh_view) {
+        video_play("smk/introf01.smk");
+        video_play("smk/credf01.smk");
+    }
 
     /* -------------------------------------------------------------- */
     /* Loading screen                                                   */
@@ -214,37 +189,38 @@ int main(int argc, char *argv[])
     /* -------------------------------------------------------------- */
     /* Outer game loop                                                  */
     /* Original: do { local_3c = FUN_00430eb0(...); ... } while(true)  */
+    /*                                                                  */
+    /* Each top-level state owns its own inner frame loop (mirroring    */
+    /* the original, where every game state ran its own while() with    */
+    /* its own message pump). The dispatcher just hands control to the  */
+    /* active state's runner and loops until something sets GS_QUIT.    */
     /* -------------------------------------------------------------- */
 
-    fprintf(stdout, "[main] Entering game loop. ESC or close to quit.\n");
+    if (mesh_view) {
+        /* Developer entry point: browse decoded OEG meshes, then exit. */
+        fprintf(stdout, "[main] --meshview: entering mesh viewer.\n");
+        meshview_run();
+    } else {
+        fprintf(stdout, "[main] Entering game loop. ESC or close to quit.\n");
 
-    while (g_gamestate != GS_QUIT) {
+        while (g_gamestate != GS_QUIT) {
+            switch (g_gamestate) {
+                case GS_FRONTEND:
+                    state_frontend_update();   /* transitions, returns immediately */
+                    break;
 
-        PlatformEvent evt;
-        if (!platform_pump_events(&evt)) {
-            g_gamestate = GS_QUIT;
-            break;
+                case GS_GAMEPLAY:
+                    gameplay_run();            /* owns the screen until state changes */
+                    break;
+
+                default:
+                    /* States we haven't built yet (menus, lobby, session end). */
+                    fprintf(stdout, "[main] state %d not implemented — quitting.\n",
+                            (int)g_gamestate);
+                    g_gamestate = GS_QUIT;
+                    break;
+            }
         }
-
-        render_begin_frame();
-
-        switch (g_gamestate) {
-            case GS_GAMEPLAY:    state_gameplay_update();    break;
-            case GS_FRONTEND:    state_frontend_update();    break;
-            case GS_MAINMENU:    state_mainmenu_update();    break;
-            case GS_SHELL:       /* ShellMain running — handled inside session runner */ break;
-            case GS_LOBBY:
-            case GS_LOBBY_ALT:   state_lobby_update();       break;
-            case GS_ENDSESSION:  state_endsession_update();  break;
-            case GS_MISSIONEND:  state_missionend_update();  break;
-            case GS_MP_FOLLOWON:
-                g_gamestate = GS_FRONTEND;
-                break;
-            case GS_QUIT:
-                break;
-        }
-
-        render_end_frame();
     }
 
     /* -------------------------------------------------------------- */
@@ -255,6 +231,7 @@ int main(int argc, char *argv[])
     platform_vfree(pool_primary,   0x40000);
 
     StrLookupDestroy(sl);
+    meshcache_shutdown();
     vfs_shutdown();
     render_shutdown();
     platform_shutdown();
@@ -264,18 +241,8 @@ int main(int argc, char *argv[])
 }
 
 /* -----------------------------------------------------------------------
- * State handlers — stubs
- * Each will grow into its own .c/.h as we implement them.
+ * State handlers
  * ----------------------------------------------------------------------- */
-
-static void state_gameplay_update(void)
-{
-    static bool printed = false;
-    if (!printed) {
-        fprintf(stdout, "[state] GS_GAMEPLAY — stub\n");
-        printed = true;
-    }
-}
 
 static void state_frontend_update(void)
 {
@@ -289,40 +256,4 @@ static void state_frontend_update(void)
      */
     fprintf(stdout, "[frontend] Skipping shell — jumping straight to gameplay.\n");
     g_gamestate = GS_GAMEPLAY;
-}
-
-static void state_mainmenu_update(void)
-{
-    static bool printed = false;
-    if (!printed) {
-        fprintf(stdout, "[state] GS_MAINMENU — stub\n");
-        printed = true;
-    }
-}
-
-static void state_lobby_update(void)
-{
-    static bool printed = false;
-    if (!printed) {
-        fprintf(stdout, "[state] GS_LOBBY — stub\n");
-        printed = true;
-    }
-}
-
-static void state_endsession_update(void)
-{
-    static bool printed = false;
-    if (!printed) {
-        fprintf(stdout, "[state] GS_ENDSESSION — stub\n");
-        printed = true;
-    }
-}
-
-static void state_missionend_update(void)
-{
-    static bool printed = false;
-    if (!printed) {
-        fprintf(stdout, "[state] GS_MISSIONEND — stub\n");
-        printed = true;
-    }
 }

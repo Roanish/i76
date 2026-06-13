@@ -80,9 +80,21 @@ STARTUPINFO.wShowWindow as param_4. This is the standard WinMain call.
 | `DAT_004f3704`   | `0x004f3704` | ???              | ??? | If nonzero, triggers a 4-call render sequence (f3c, ecd0, f40, f60). WHY GUESSED: always tested before palette/flip calls. CONFIRM BY: find what writes this value and why. |
 | `DAT_00526a5c`   | `0x00526a5c` | (font handle)    | ??? | Return of FUN_0046d440. Passed to FUN_0046d650. WHY GUESSED: called after FUN_0049ac10 which takes a font filename. CONFIRM BY: reverse FUN_0046d440. |
 | `DAT_005e5cd8`   | `0x005e5cd8` | (global heap)    | CONFIRMED | Windows HANDLE passed to every HeapAlloc/HeapFree in the ZFS layer. The process heap. |
-| `DAT_0052fc40`   | `0x0052fc40` | `g_object_heap`  | CONFIRMED | Primary game object heap handle. Passed to HeapSize/HeapAlloc/HeapFree for all game entity allocations. Distinct from ZFS heap (DAT_005e5cd8) and VFS cache heap (g_cache_heap). |
-| `DAT_0052bcd0`   | `0x0052bcd0` | `g_obj_buckets`  | CONFIRMED | Game object hash table — 2029 linked list heads (4 bytes each, table ends at 0x52dc84). Walked by mem_prefetch_objects every frame. |
-| `DAT_0052fc48`   | `0x0052fc48` | `g_obj_list2`    | ??? | Separate heap-object list head (node stride +0x18). Walked by mem_prefetch_objects after the bucket sweep. CONFIRM BY: find what writes this. |
+| `DAT_0052fc40`   | `0x0052fc40` | `g_object_heap`  | CONFIRMED | Mesh-cache **data heap** — holds the decoded GEO mesh buffers (node+0x0c points here). HeapCreate'd by obj_system_init, RAM-sized (g_object_heap_size). g_object_heap_size tracks free space (`-= HeapSize` on alloc, `+= HeapSize` on evict). See Object / Geometry Mesh Cache section. |
+| `DAT_0052fc44`   | `0x0052fc44` | `g_object_heap2` | CONFIRMED | Mesh-cache **node heap** — holds the ~0x20-byte cache node structs. `HeapCreate(0,0,0)` (growable). Confirmed by `HeapFree(g_object_heap2, node)` in geo_build_mesh eviction. |
+| `DAT_0052bcd0`   | `0x0052bcd0` | `g_obj_buckets`  | CONFIRMED | Mesh cache indexed **by data-buffer pointer**: 2029 (0x7ed) heads [0x52bcd0, 0x52dc84). Bucket = `(ptr*0x6cd+0xaab)%0x7ed`; chain via node+0x10. (Better name: g_meshcache_by_ptr.) Zeroed by obj_system_init, walked by mem_prefetch_objects. |
+| `DAT_0052dc84`   | `0x0052dc84` | (inter-table dword) | ??? | Lone dword between the two cache tables; skipped by both zeroing loops in obj_system_init. CONFIRM BY: find xrefs. |
+| `DAT_0052dc88`   | `0x0052dc88` | `g_obj_buckets2` | CONFIRMED | Mesh cache indexed **by name**: 2029 heads [0x52dc88, 0x52fc3c). Key = 8-byte name at node+0x00, case-insensitive (`& 0xdfdfdfdf`); bucket = `(((hi^lo)&0xdfdfdfdf)*0x6cd+0xaab)%0x7ed`; chain via node+0x14. (Better name: g_meshcache_by_name.) Zeroed by obj_system_init. |
+| `DAT_0052fc48`   | `0x0052fc48` | `g_obj_list2`    | CONFIRMED | Mesh-cache **LRU list head** (oldest entry — evicted first). Doubly-linked: node+0x18 next, node+0x1c prev. (Better name: g_meshcache_lru_head.) Confirmed by geo_build_mesh eviction. mem_prefetch_objects also walks it. |
+| `DAT_0052fc4c`   | `0x0052fc4c` | `g_obj_list2_tail` | CONFIRMED | Mesh-cache **LRU list tail** (newest). Set to 0 when the list empties on eviction. (Better name: g_meshcache_lru_tail.) |
+| `DAT_0052fc3c`   | `0x0052fc3c` | `g_has_current_tex` | CONFIRMED | Flag: a "current texture" is set in g_current_tex_name. Used by geo_build_mesh face-texture binding. |
+| `DAT_0052fc50`   | `0x0052fc50` | `g_current_tex_name` | CONFIRMED | 16-byte current texture name (fc50/54/58/5c). Compared via _stricmp during mesh face decode; FUN_004679b0 validates it. |
+| `DAT_00652784`   | `0x00652784` | `g_object_heap_size` | CONFIRMED | Free-space counter for g_object_heap. Initial: dwTotalPhys > 48 MB → 2,000,000; ≤ 48 MB → 1,300,000. |
+| `DAT_00526a50`   | `0x00526a50` | `g_geo_log_file`  | CONFIRMED | FILE* debug log handle. When non-null, geo_cache_acquire fprintf's "<name> <size>" for each mesh loaded. |
+| `DAT_00526a54`   | `0x00526a54` | `g_geo_load_depth` | ??? | Counter incremented on entry to geo_cache_acquire's load path, decremented on exit. Re-entrancy / in-flight-load guard. CONFIRM BY: find readers. |
+| `DAT_00529bf0`   | `0x00529bf0` | `g_objmodel_registry` | CONFIRMED | Object→model registry: 2029-bucket hash keyed by **object pointer** (`(objptr*0x6cd+0xaab)%0x7ed`), chain via entry+0x38. Each entry is a 0x3c-byte model record (see Object Model Registry). Distinct from the mesh cache (g_obj_buckets). |
+| `DAT_0052bba4`   | `0x0052bba4` | `g_objmodel_heap` | CONFIRMED | Heap for the 0x3c-byte model registry entries. HeapAlloc'd in obj_model_clone. |
+| `DAT_0052bba8`   | `0x0052bba8` | `g_objmodel_node_heap` | CONFIRMED | Heap for the 0x74-byte model sub-part nodes (singly-linked via +0x70). |
 | `DAT_0052fc70`   | `0x0052fc70` | `g_arr_buckets`  | CONFIRMED | Typed-array object hash table — 109 linked list heads (table ends at 0x52fe24). Each node+0x10 → buffer descriptor {count, element_size_with_flags}. Walked by mem_prefetch_arrays. |
 | `DAT_0052fc6c`   | `0x0052fc6c` | `g_arr_list2`    | ??? | Separate typed-array list head (node stride +0x1c). Walked by mem_prefetch_arrays after bucket sweep. CONFIRM BY: find what writes this. |
 | `DAT_005e5ce0`   | `0x005e5ce0` | (error buffer)   | CONFIRMED | Global char[] error message buffer. Every ZFS/VFS error sprintf's into here before returning 0/NULL. |
@@ -154,6 +166,15 @@ CONFIRMED = we have seen enough of the function's call sites and/or
 | `FUN_004a1c20` | `video_frame_tick()`  | No args. Returns 0 when video done. Called in while() loop after video_play. |
 | `FUN_004a1c60` | `video_stop()`        | No args. Called when `DAT_00503e94 == 0x20` inside video loop. |
 | `FUN_004a3c00` | `vmem_alloc()`        | Args: (commit_size, reserve_size). Returns ptr, NULL on fail. Called exactly twice with known sizes. |
+| `FUN_0043a6d0` | `obj_system_init()`   | No args. Mesh-cache init (full body confirmed): reads MEMORYSTATUS; zeroes both 2029-head cache tables (g_obj_buckets, g_obj_buckets2); clears LRU head/tail; sizes g_object_heap_size by RAM (2.0M / 1.3M); `HeapCreate`s g_object_heap (data) + g_object_heap2 (nodes). Returns false on data-heap failure, else `(g_object_heap2 == NULL)`. |
+| `FUN_0043a770` | `geo_cache_acquire()` | Args: (name_ptr → 8-byte mesh name). The mesh-cache acquire entry point and the only caller of geo_build_mesh. Uppercases the name, looks it up in g_obj_buckets2; on hit bumps refcount (+0x08) and pulls the node off the LRU free-list if idle; on miss loads via vfs_lod, allocates a 0x20-byte node from g_object_heap2, decodes via geo_build_mesh, and links it into both hash tables. Returns the mesh data ptr (0 on load failure). Full body confirmed — see Object / Geometry Mesh Cache. |
+| `FUN_0043a9a0` | `geo_cache_release()` | Args: (mesh data ptr). Mesh-cache deref — looks node up via g_obj_buckets (by-ptr), refcount--, appends to LRU tail on 0. Confirmed via obj_model_clone / obj_model_set_state. Completes the mesh cache. |
+| `FUN_00438d00` | `obj_model_set_variant()` | Args: (object ptr, variant index). Full body confirmed. Sets the model's **variant axis** (record+0x08 = which sub-part node). Walks the node list to `index`, uses the current slot (record+0x0c) to pick a 0x10-byte name; if it differs from the bound name, releases old / acquires new mesh, stores in record+0x04 and object+0x5c, then FUN_0043ce90(obj) rebuilds render state. 3rd of 4 geo_cache_acquire callers. |
+| `FUN_00438e10` | `obj_model_set_slot()` | Args: (object ptr, slot index). Full body confirmed. Sets the model's **slot axis** (record+0x0c). Uses the current variant (record+0x08) to find the node, picks name at `slot*0x10`; same release/acquire/rebuild if changed. Keeps a 1-deep undo cache (record+0x10 = prev slot index, record+0x24 = prev slot name) to skip re-lookup when toggling back. 4th of 4 geo_cache_acquire callers. |
+| `FUN_00438a80` | `obj_model_clone()`   | Args: (src_obj ptr, dst_obj ptr). Full body confirmed. Looks up src_obj in g_objmodel_registry, allocates+inserts a new 0x3c-byte model record for dst_obj, deep-copies the src's 0x74-byte sub-part node list, copies object fields +0x84..+0xab src→dst, copies the model name, `geo_cache_acquire`s the mesh and stores it in the record (+0x04) and the object (+0x5c). Returns 1 (0 if src not registered). 2nd of 4 geo_cache_acquire callers — the object→model binding layer; entity-adjacent. See Object Model Registry. |
+| `FUN_004312f0` | `assets_preload()`    | Args: (scenario/level base name). Full body confirmed. Builds a manifest filename (extension chosen by display_ready: D3D vs software), loads it, and walks it via asset_list_next, warming each resource cache up to a per-category memory budget. Per entry type: 'g'→geo_cache_acquire+geo_cache_release (<200K geom stop), 't'→texture_load (<500K), 'x'/'v'/'a'→texture_load+FUN_00489d40 D3D upload (<700K; a=type2,x=type1), 'p'→vfs_lod pre-fault (<1.7M). Logs cache free-space to g_geo_log_file/DAT_005b1f80. One of 4 callers of geo_cache_acquire — a preloader, NOT the entity store. |
+| `FUN_0043aa60` | `geo_build_mesh()`    | Args: (geo_image ptr [magic 0x2e47454f], size). Full body confirmed. Allocates a renderable mesh buffer from g_object_heap and unpacks the GEO's vertex arrays (3×float, +0x0c/+0x10 sub-arrays), face records (0x40 + n*0x10 each, +0x14), per-face texture binding (FUN_004679b0 + g_current_tex_name) and centroids. Returns the buffer. On heap-full, runs the LRU **eviction** loop (frees victim's data from g_object_heap + node from g_object_heap2, unlinks from both hash tables + LRU list) and retries; fatal "new geometry: couldn't make room" if LRU empty. Called only by geo_cache_acquire. |
+| `FUN_0041b3c0` | `sound_buffer_load()` | Args: (sound_system, sound_resource, fmt_out). DirectSound sample loader (confirmed by FourCC magics + IDirectSound/IDirectSoundBuffer vtable offsets). Checks a by-name cache (FUN_0041a6d0); if already loaded, `DuplicateSoundBuffer`s the existing buffer. Else `vfs_lod`s the file, handles a `GAS0` (0x30534147) header (skip 0x1c, copy 7-dword fmt desc to resource+0x30), parses `RIFF`/`WAVE`/`fmt `/`data`, then `CreateSoundBuffer`(dev vtbl+0xc) → `Lock`(+0x2c) → memcpy PCM → `Unlock`(+0x4c). Resource struct: +0x04 name, +0x30 fmt desc(0x1c), +0x4c/+0x50 file ptr/cursor, +0x54 IDirectSoundBuffer, +0x58 3D buffer, +0x6c refcount, +0x70 size, +0x78 flags (bit 0x200 = in-memory). g_sound_bytes_total accumulates loaded size. **Proves `vfs_lod` returns RAW file bytes — header handling is the caller's job.** |
 | `FUN_004a3cc0` | `vmem_free()`         | Takes the ptr returned by vmem_alloc. Called on both pools at shutdown. |
 | `FUN_00484960` | `window_create()`     | Takes (buffer, hInstance, class_name). Returns ptr. Result copied into DAT_00653b40 (1068 bytes). |
 | `FUN_00488d20` | `fatal_error()`       | Takes string. Marked `/* WARNING: Subroutine does not return */` in Ghidra. Called for all fatal conditions. |
@@ -229,9 +250,9 @@ These were renamed during Ghidra work; full decompilation not yet recorded here.
 | `pak_find_entry` | `pak_find_entry()`  | bsearch into `g_pak_entries` (DAT_00590a64, stride 0x1c) by geo_name. Returns value at entry+0x18 (`PakEntry.frame_count`), or -1 on miss. Confirmed by pix_init analysis. |
 | (TBD)          | `vfs_get_uncompressed_size()` | Path-building identical to vfs_read_file_impl. Loose: ftell. ZFS: zfs_find (returns flags>>8 or entry.size). Returns 0 on not-found. Consistent "bytes needed after load" API. |
 | (TBD)          | `vfs_cache_evict()`   | Evicts an entry from the VFS read cache. |
-| (TBD)          | `vfs_lod()`           | LOD selection lives inside the VFS layer. |
-| (TBD)          | `vfs_lod_cached()`    | Cached LOD lookup. |
-| (TBD)          | `vfs_lod_pak()`       | LOD lookup for .pak files. |
+| (TBD)          | `vfs_lod()`           | CONFIRMED body. Dispatcher: copies name (16B), `_strlwr` lowercases it, rejects names whose first 4 chars == DAT_004c7e70 (a sentinel string, likely "none"/"null" → return 0). Otherwise routes by g_vfs_prefer_loose: set → vfs_lod_cached then vfs_lod_pak; clear → vfs_lod_pak then vfs_lod_cached. Returns first non-zero. Does NOT do the file read / OEG framing itself. |
+| (TBD)          | `vfs_lod_cached()`    | CONFIRMED body. The VFS file-cache **acquire** (counterpart to vfs_cache_deref). Hashes the name (`h=h*2^c`, abs, %2009), walks g_file_cache_buckets; on hit, unlinks from LRU if refcount==0 then refcount++; on miss, evicts LRU tail if full, `HeapAlloc(g_cache_heap, size+0x24)`, `vfs_read_file(name,…,entry+0x24,size)`, inserts + inits the 0x24 header. **Returns entry+0x24 = the RAW file bytes (no framing/strip).** Fatal if size+0x24 > 0x7fff7. So the OEG framing is NOT here — loose meshes come back verbatim. |
+| (TBD)          | `vfs_lod_pak()`       | CONFIRMED body. PIX/PAK resolver: `bsearch(name, g_pak_entries, g_pak_entry_count, 0x1c, cmp@LAB_00468310)` → PakEntry. PakEntry+0x10 = pix-file index → g_pix_file_names record (stride 0x18). Lazily loads that .pak via `vfs_lod_cached(record+0x00)` into record+0x10 (fatal "Could not load pack %s" on fail), refcount++ at record+0x14. **Returns `loaded_pak_base + PakEntry+0x14`** — pointer to this entry's record inside the loaded PAK. This is the source of the records geo_build_mesh parses. |
 
 ### Unknown — Need Investigation
 
@@ -268,11 +289,248 @@ These were renamed during Ghidra work; full decompilation not yet recorded here.
 | `FUN_00418ff0` | On window deactivate, non-video | No args. Called on WM_ACTIVATE(deactivate) when video not playing. |
 | `FUN_00430860` | On window activate, input mode 0x10 | Args: (&DAT_004f36c8). Called on WM_ACTIVATE for g_input_mode==0x10. |
 | `FUN_0049da10` | On window activate, input mode 0x10 | No args. Paired with FUN_00430860 on WM_ACTIVATE. |
-| `FUN_0046d1c0` | After scenario name known | No args. Called once per session before loading assets. |
-| `FUN_0049f7e0` | Args: scenario name string | Called after font load. Scenario-specific setup? ??? CONFIRM BY: reverse it. |
-| `FUN_004bd1b0` | Args: scenario name string | Called after FUN_0049f7e0. |
+| `FUN_0046d1c0` | `palette_blackout()` | No args. CONFIRMED. Sets _DAT_00591284=1, zeroes a 256×3 palette (all black), calls SetPalette (DAT_00653f48) on DAT_00653b40 — blanks the screen to black for a load transition. NOT scene/placement. |
+| `FUN_0049f7e0` | `scenario_classify()` | Args: scenario name. CONFIRMED. `sscanf("%1s%2d")` → prefix char + number, resolves a small code into `DAT_00503d78` (g_scenario_category): prefix==DAT_00503d80→1, ==DAT_00503d7c→2, else a `{char,num,code}` table at DAT_00503c8c. Classifier only — NOT placement. |
+| `FUN_004bd1b0` | `mission_file_load()` | Args: scenario name. CONFIRMED (strings "Cannot locate Mission file %s", "Mission file %s not found"). Parses name → mission number (DAT_005f9b2c = atol) + type (DAT_005f9b30 by 1st letter: m/n→1, t→2, s/p→3); appends default mission ext (DAT_00506528) if none; resolves path via `FUN_004bf370` (mission_file_locate); loads via `vfs_lod` into DAT_005e5ccc (end=DAT_005e5cd0); parses TWO tagged chunks via `FUN_004bccb0(buf, tag, code, 0, name, 1, end)` — tags DAT_005061e8 (code 2) then DAT_00506208 (code 7). **`FUN_004bccb0` is the mission-chunk parser — the likely home of object/vehicle PLACEMENT.** |
+| `FUN_004bf370` | `mission_file_locate()` ? | Args: mission name. Returns resolved path or NULL (→ fatal "Cannot locate Mission file"). CONFIRM BY: reverse it. |
+| `FUN_004bd0e0` | `chunk_file_parse()`   | CONFIRMED. Generic: vfs_lod a chunked file, parse common header table DAT_005061e8 (2 entries) then a CALLER-supplied table. Reusable loader. |
+| `FUN_004bd980` | `chunk_file_read_string()` | CONFIRMED. Same load + common header, then 1-entry table DAT_005064d0; copies the handler's stack string out. Pulls one named string field from a chunked file. |
+| `FUN_004bccb0` | `chunk_table_parse()` | CONFIRMED. Generic table-driven IFF/tagged-chunk reader (used for .sdf/.vcf/mission — the BWD2/REV family). Args: (data, descriptor_table, table_count, param4, param5(name), mode, end). Data = chunk stream: [u32 tag][u32 byte_len][payload], advance by byte_len; "EXIT"(0x54495845) terminates. Descriptor entry = 0x10 bytes: +0x00 FourCC tag, +0x08 **handler fn ptr**, +0x0c flags (0x04/0x08/0x40 mandatory, 0x80 seen, 0x100/0x200/0x400 count/array, 0x800/0x1000/0x2000 select extra arg = param4/descriptor/param5, bit1 = payload skips 8-byte header). For each matched chunk calls `(*handler)(payload, extra, end)`. **The actual data (incl. placement) is read by the per-entry HANDLERS, not here.** mission_file_load passes tables DAT_005061e8 (2 entries) + DAT_00506208 (7 entries). |
 | `FUN_00488d30` | Called very frequently in gameplay loop | No args. Cheap call — yield? input poll? ??? WHY GUESSED: called 3+ times per frame with no apparent side effects on state. CONFIRM BY: reverse it. |
 | `FUN_004a2ce0` | Returns float used for timing deltas | No args. Return value compared against stored floats with 1.0 and 10.0 thresholds. Time in seconds? ??? WHY GUESSED: delta comparisons `>= 1.0` and `>= 10.0` suggest seconds, not ms. CONFIRM BY: reverse it or check callers for unit context. |
+| `FUN_00431260` | `asset_list_next()` ??? | Args: (out type_char, out name_buf, cursor, end). Manifest iterator used by assets_preload — returns next entry's type char ('p'/'t'/'x'/'v'/'a'/'g') + asset name, advances cursor; returns next cursor (0 = done). CONFIRM BY: reverse to pin the manifest line format. |
+| `FUN_00489d40` | D3D texture upload ??? | Args: (loaded texture, type flag 0/1/2). Called only when display_ready() in assets_preload's x/v/a branch. Likely uploads a texture to the D3D/hardware path. CONFIRM BY: reverse it. |
+| `FUN_0043ce90` | obj render-state rebuild ??? | Args: (object ptr). Called by obj_model_set_state right after the object's mesh changes. Likely recomputes bounding box / collision / render state from the new mesh. CONFIRM BY: reverse it. |
+
+---
+
+## Object / Geometry Mesh Cache
+
+CONFIRMED by: full decompilation of `obj_system_init` (FUN_0043a6d0),
+`geo_cache_acquire` (FUN_0043a770), and `geo_build_mesh` (FUN_0043aa60).
+
+Despite the `g_obj_*` naming, this is a **named, LRU-evicting cache of decoded
+GEO meshes** — NOT the live game-entity (vehicle/AI) store. Meshes are decoded
+on demand, cached in `g_object_heap`, indexed two ways, and evicted oldest-first
+when the heap (~2 MB / 1.3 MB by RAM) runs out of room. `mem_prefetch_objects`
+walks it every frame to page the geometry in before it's drawn.
+
+### Two heaps
+- `g_object_heap`  (DAT_0052fc40) — the **mesh data buffers** (node+0x0c → here).
+- `g_object_heap2` (DAT_0052fc44) — the **cache node structs** (~0x20 bytes).
+
+### Cache node layout (0x20 bytes, heap2 allocation) — fully confirmed
+| Offset | Field |
+|--------|-------|
+| `+0x00` | `char name[8]` — uppercased 8-char name, the by-name key (`+0x04` is just the second half) |
+| `+0x08` | `uint32 refcount` — set 1 on create, `++` on acquire; **0 ⇒ idle, sits on the LRU free-list and may be evicted** |
+| `+0x0c` | **data ptr** → decoded mesh buffer in g_object_heap |
+| `+0x10` | next in by-ptr table chain (`g_obj_buckets`) |
+| `+0x14` | next in by-name table chain (`g_obj_buckets2`) |
+| `+0x18` | next in LRU list (`g_obj_list2`) |
+| `+0x1c` | prev in LRU list |
+
+### Three intrusive structures (each node is in all three)
+1. **By-pointer index** `g_obj_buckets` — 2029 heads; bucket = `(data_ptr*0x6cd + 0xaab) % 0x7ed`; chain via +0x10. Used to find a node from its mesh buffer (e.g. on free).
+2. **By-name index** `g_obj_buckets2` — 2029 heads; the 8-byte name is read as a 64-bit value, folded `hi ^ lo`, masked `& 0xdfdfdfdf` (ASCII upcase), bucket = `(folded*0x6cd + 0xaab) % 0x7ed`; chain via +0x14. Used to look a mesh up by name on load.
+3. **LRU list** `g_obj_list2` (head/oldest) … `DAT_0052fc4c` (tail/newest) — doubly-linked +0x18/+0x1c; eviction takes the head.
+
+Hash constant for both tables: `h(k) = (k * 0x6cd + 0xaab) % 0x7ed`
+(= `(k*1741 + 2731) % 2029`). Note: the by-name key is `toupper`'d before
+hashing AND the hash re-masks `& 0xdfdfdfdf` — belt-and-suspenders case-fold.
+
+### Acquire — `geo_cache_acquire(name_ptr)` (FUN_0043a770)
+The single entry point callers use, and the only caller of geo_build_mesh:
+```
+upper8 = toupper(name[0..7])
+hit = walk g_obj_buckets2[hash_name(upper8)] for a node whose 8-byte name matches
+if hit:
+    if refcount++ == 0: unlink node from LRU free-list   # was idle, now in use
+    return node->mesh
+else (miss):
+    img = vfs_lod(name)                  # load GEO image via VFS; 0 => return 0 (fail)
+    size = vfs_exists(name)
+    node = HeapAlloc(g_object_heap2, 0x20)
+    node->name = upper8;  node->refcount = 1
+    node->mesh = geo_build_mesh(img, size)
+    vfs_free(img)
+    link node into g_obj_buckets2[hash_name]  (by-name, via +0x14)
+    link node into g_obj_buckets[hash_ptr(node->mesh)]  (by-ptr, via +0x10)
+    if g_geo_log_file: fprintf("%s %d", name, size)
+    return node->mesh
+```
+
+### Release/deref — `geo_cache_release` (FUN_0043a9a0) — CONFIRMED
+The **release/deref** half. Takes the **mesh data pointer**, looks the node up via
+`g_obj_buckets` (by-ptr index — this is exactly why that index exists), does
+`refcount--`, and on 0 appends to the LRU tail `g_meshcache_lru_tail`. Confirmed by
+use in obj_model_clone (`release(acquire(name))`) and obj_model_set_state (releases
+the old mesh by ptr before acquiring a new one). **The mesh cache is now complete:
+obj_system_init + geo_cache_acquire + geo_cache_release + geo_build_mesh.**
+
+---
+
+## Object Model Registry (`g_objmodel_registry`)
+
+CONFIRMED by: `obj_model_clone` (FUN_00438a80). Partial — only the clone path seen.
+
+A **per-object render/model record**, separate from the mesh cache. A 2029-bucket
+hash table (`g_objmodel_registry` @ 0x00529bf0) keyed by the **game object's
+pointer**, mapping each live object to its mesh + model sub-parts. Two heaps:
+`g_objmodel_heap` (the 0x3c records) and `g_objmodel_node_heap` (the 0x74 nodes).
+
+### Model record (0x3c bytes, g_objmodel_heap)
+| Offset | Field |
+|--------|-------|
+| `+0x00` | key = **object pointer** (hash key) |
+| `+0x04` | currently-bound mesh ptr (from geo_cache_acquire) — also mirrored into object+0x5c |
+| `+0x08` | **variant index** — which sub-part node is selected (set by obj_model_set_variant) |
+| `+0x0c` | **slot index** — which 0x10-byte name within the node (set by obj_model_set_slot; init -1) |
+| `+0x10` | previous slot index (1-deep undo cache; init -1) |
+| `+0x14` | currently-bound model **name** (≤15 chars) — the geo_cache_acquire key |
+| `+0x24` | previous slot's 16-byte name (undo cache, paired with +0x10) |
+| `+0x34` | head of the sub-part node list |
+| `+0x38` | hash-chain next |
+
+Sub-part node (0x74 bytes): a table of **7 × 0x10-byte mesh-name slots** (0x70 bytes)
++ next ptr at `+0x70` (singly-linked, NULL-term). So the variants form a 2D grid:
+`[node = variant index][slot = record+0x0c]` → a 16-byte mesh name. obj_model_set_state
+walks to node `index`, reads slot `record+0x0c`, and swaps the bound mesh if its name
+changed (LOD / damage state / part swap).
+
+### Game object struct (the hashed pointer) — fields seen so far
+| Offset | Field |
+|--------|-------|
+| `+0x5c` | cached mesh ptr (set by obj_model_clone) |
+| `+0x84`..`+0x93` | 4 dwords (copied as a block) |
+| `+0x94`..`+0xab` | 6-dword block — likely a transform/orientation |
+
+### Still needed
+All 4 geo_cache_acquire callers (obj_model_clone / _set_variant / _set_slot / and
+assets_preload) only ever *consume* an existing object pointer — none allocate one.
+So the **game object struct is allocated outside the mesh-acquire call graph.** Next
+threads to the real entity store:
+- The g_objmodel_registry **create/register** function — i.e. the *other* writer of
+  DAT_00529bf0 (besides obj_model_clone), which first binds a fresh object+name.
+- **Whatever allocates the object struct** and writes object+0x5c / reads the
+  +0x84..+0xab transform block — find via xrefs to those object offsets, or callers
+  of obj_model_clone / obj_model_set_variant (they pass the object in).
+
+### GEO/OEG mesh file format — CONFIRMED & DECODED (2026-06-13b)
+**The "token stream" theory was wrong — it was LZO compression.** ZFS entries for the
+`.geo`/g-tier-`.pak` meshes are stored **LZO1Y-compressed** (entry flags low byte = 0x04,
+uncompressed size = `flags >> 8`). The leading `0x20`/`0x22` byte we kept seeing was the
+**LZO compression marker**, not part of the asset; the `0x4c/0x4d/0x5c/0x5d` "markers"
+were LZO copy tokens. After decompression the buffer is a clean **flat** layout that
+`geo_build_mesh` parses directly (verified: NEEDLE 286→592B closes exactly at EOF;
+A41ATNK1 4500→17386B → 50 verts/21 faces, bbox 12×2.5×11, geometry is an open
+octagonal tub — renders correctly). What these meshes *represent* (object class,
+scenery vs. vehicle, the meaning of name tokens like `fnsg`/`plin`) is NOT yet
+confirmed and is deliberately left unlabeled.
+
+Decompressed OEG layout (`param_1` points at byte 0 = the magic; **no lead byte**):
+```
+0x00  u32  magic = 0x2e47454f "OEG."
+0x04  u32  count            (purpose TBD; scales loosely with size)
+0x08  char name[16]         (null-padded, FIXED 16-byte field — "NEEDLE","A41ATNK1")
+0x18  u32  nVerts           (= geo_build_mesh param_1[6])
+0x1c  u32  nFaces           (= param_1[7])
+0x20  u32  ?                (param_1[8])
+0x24  vec3f  posA[nVerts]   (12B each — positions; copied to out+0x18 region)
+      vec3f  posB[nVerts]   (12B each — 2nd vertex set, normals? copied to out+...)
+      faces[nFaces]:        (start = (nVerts*6+9)*4 from base)
+        +0x04 u32 nFaceVerts
+        +0x37 entry[nFaceVerts], 0x10B each:
+              +0x00 u32 vertex index (into posA)
+              +0x04 3×dword (uv / per-vertex data)
+        record size = 0x37 + nFaceVerts*0x10
+```
+A `.pak` holds **multiple** OEG records (the tank pak is 17386B; the first mesh ends at
+3831). `vfs_lod_pak` returns `pak_base + PakEntry[+0x14]` to select a specific named
+record. So a full vehicle = several OEG records (hull/turret/wheels/etc.) acquired by name.
+
+**TOOL BUG found & to fix:** `tools/zfs_dump get` returned the *compressed* bytes (286
+not 592) — it isn't decompressing on the `get` path (works via `zfs_read` though; used
+that to extract the real bytes). `vfs_lod_cached` correctly sizes by `vfs_get_uncompressed_size`
+and `vfs_read_file` decompresses into the buffer — the engine path was always right.
+
+Cross-loader helper `FUN_004679b0` is a generic name/resolve check (used by both mesh
+and audio loaders), NOT texture-specific.
+
+---
+
+## Mission file & object placement (2026-06-13)
+
+CONFIRMED by: mission_file_load, chunk_table_parse, the *DEF/OBJ handler chain, and the
+two descriptor tables read from data. This answers "where are world objects positioned".
+
+**Load chain:** scenario name → `mission_file_load` (FUN_004bd1b0) resolves the mission
+file (`mission_file_locate` FUN_004bf370, default ext `DAT_00506528`), `vfs_lod`s it, and
+runs `chunk_table_parse` (FUN_004bccb0) over it — first with the common header table
+`DAT_005061e8` (2 entries), then the **mission body table `DAT_00506208` (7 entries)**.
+
+**`chunk_table_parse`** is a generic, reusable IFF/tagged-chunk reader (also used for
+`.sdf`/`.vcf`). Descriptor entry = 0x10 bytes: `+0x00` FourCC tag, `+0x08` handler fn ptr,
+`+0x0c` flags (mandatory/seen/count-array/which-extra-arg/skip-8-byte-header). Chunk stream
+= `[u32 tag][u32 byte_len][payload]`; `EXIT` (0x54495845) terminates. It dispatches each
+chunk to its handler `(payload, name, end)`. The format is **nested** — a handler can run
+`chunk_table_parse` again on a sub-table:
+
+```
+mission file
+└─ DAT_00506208 (7): WDEF TDEF RDEF ODEF LDEF ADEF EXIT   (handlers FUN_004bd450..4f0, thin wrappers)
+     └─ ODEF → FUN_004b3630 → DAT_00504928 (3): OREV, OBJ(array, flag 0x400), EXIT
+                                   └─ OBJ → FUN_004b3660  (reads ONE placed object)
+```
+
+**`FUN_004b3660`** (the per-OBJ reader) is the placement reader and the entry to entity
+creation:
+1. `FUN_004b3060(payload,end,subtag)` → the object's **geometry/definition name** (fatal
+   "Object found with no geometry").
+2. Type-1 named markers: name `spawn`/`regen` → `FUN_0044c4a0`; `check` → `FUN_00444ad0`.
+3. Object **type code** (`+0x64`) switch → `FUN_004b3e20(...)` allocates the object struct
+   (the entity). Richer types parse sub-table `DAT_00504958` (6 entries) for per-object fields.
+4. Builds a **48-byte transform** (`local_88`, likely a 3×4 matrix = 12 floats) via
+   `FUN_004b3db0`, then **`FUN_00453d50(entity, transform, …)`** spawns it into the world
+   (fatal "I'76 Nitro Pack cannot create entity") — **this is the entity-store insert** —
+   followed by `FUN_004540b0` to link it.
+
+So each placed object = a geometry/def name + a 3×4 world transform inside an `OBJ` chunk;
+`FUN_00453d50` is the live-entity creator (the long-sought entity store entry point).
+Spawn points, regen points and checkpoints are `OBJ` records too.
+
+### Renamed/identified function & global addresses (this thread)
+| Address | Name | Status |
+|---------|------|--------|
+| `FUN_004bd1b0` | `mission_file_load` | applied |
+| `FUN_004bf370` | `mission_file_locate` | applied |
+| `FUN_004bccb0` | `chunk_table_parse` | applied |
+| `FUN_004bd0e0` | `chunk_file_parse` | applied |
+| `FUN_004bd980` | `chunk_file_read_string` | applied |
+| `FUN_0041b3c0` | `sound_buffer_load` | proposed (confirmed body) |
+| `FUN_0046d1c0` | `palette_blackout` | proposed (confirmed) |
+| `FUN_0049f7e0` | `scenario_classify` | proposed (confirmed) |
+| `FUN_004bd4b0` | `mission_odef_handler` | proposed (confirmed wrapper) |
+| `FUN_004b3630` | `odef_parse` | proposed (confirmed wrapper) |
+| `FUN_004b3660` | `obj_record_read` | proposed (confirmed body) |
+| `FUN_004b3e20` | `object_alloc` | proposed |
+| `FUN_00453d50` | `entity_spawn` | proposed (strong: "cannot create entity") |
+| `DAT_00526a54` | `g_geo_load_depth` | proposed (confirmed) |
+| `DAT_005e5ccc`/`DAT_005e5cd0` | `g_mission_buf` / `g_mission_end` | proposed |
+| `DAT_005f9b2c`/`DAT_005f9b30` | `g_mission_number` / `g_mission_type` | proposed |
+| `DAT_00503d78` | `g_scenario_category` | proposed |
+| `DAT_00506208` | `g_mission_chunk_table` | proposed |
+| `DAT_005061e8` | `g_chunk_header_table` | proposed |
+| `DAT_00504928` | `g_odef_chunk_table` | proposed |
+| `DAT_00504958` | `g_obj_subchunk_table` | proposed |
+| `DAT_0065465c`/`DAT_00654668` | `g_sound_bytes_total` / `g_sound_heap` | proposed |
+
+Tentative (inferred, bodies not fully seen): `FUN_004bd450/470/490/4d0/4f0/690` =
+`mission_{w,t,r,l,a}def_handler`/`_exit`; `FUN_004bd510`/`FUN_004bd190` = OBJ sub
+`OREV`/`EXIT` handlers; `FUN_004b3060` = `chunk_field_get`; `FUN_004540b0` =
+`entity_register`; `FUN_0044c4a0` = `spawnpoint_register`; `FUN_00444ad0` =
+`checkpoint_register`; `FUN_004b3db0` = `transform_build`; `DAT_00503c8c` =
+`g_scenario_class_table`; `DAT_00506528` = `g_mission_ext`.
 
 ---
 
@@ -601,10 +859,14 @@ Cache entry layout (CONFIRMED from pak_unload):
 [0x1c]        lru_prev (ptr)    LRU list: toward g_lru_head (newer); NULL = most recent
 [0x20]        lru_next (ptr)    LRU list: toward g_lru_tail (older)
 ```
-Total entry size: ≥ 36 bytes (0x24). Allocated from `g_cache_heap`.
+Total entry size: exactly **0x24 header + `size` bytes of file data appended**.
+Allocated as one `HeapAlloc(g_cache_heap, size + 0x24)`. `vfs_lod_cached` (the cache
+acquire) returns `entry + 0x24` — a pointer to the raw file bytes. Allocation is
+capped: `size + 0x24 > 0x7fff7` (~512 KB) is fatal ("Cannot allocate space for %s").
 
 When refcount hits 0, entry is appended to LRU free list (`g_lru_head` / `g_lru_tail`)
 but NOT immediately freed — stays available until the eviction path needs space.
+`vfs_lod_cached` is the acquire (refcount++ / un-LRU); `vfs_cache_deref` is the release.
 
 3. On total miss: `vfs_get_uncompressed_size(name)` — reads from ZFS entry flags
 
@@ -786,8 +1048,8 @@ sprites instead of drawing full geometry. Each object/LOD level has a pair:
 
 | Extension | Role |
 |-----------|------|
-| `.pix`    | Text index: maps GEO mesh names → frame range in the paired PAK file |
-| `.pak`    | Binary: packed pre-rendered sprite pixel data |
+| `.pix`    | Text index: maps GEO mesh names → record offset in the paired PAK file |
+| `.pak`    | Binary: packed records — g-tier = OEG 3D meshes, 16-tier = parametric LOD blobs (NOT sprite pixels; see PAK File Format) |
 
 Files are always paired by base name (e.g. `a1flag1g.pix` + `a1flag1g.pak`).
 
@@ -844,16 +1106,40 @@ struct PakEntry {           /* stride 0x1c */
 `g_pix_file_names[pix_file_idx]` already has the `.pak` extension (pix_init
 replaces `.pix` → `.pak` when building that array).
 
-### PAK File Format (binary)
+`g_pix_file_names` record layout (stride 0x18, CONFIRMED from vfs_lod_pak):
+```c
+struct PixFile {            /* stride 0x18 */
+    char  pak_name[16];     /* [0x00] .pak filename — passed to vfs_lod_cached */
+    void *loaded;           /* [0x10] cached loaded-PAK base ptr (0 = not loaded yet) */
+    int   refcount;         /* [0x14] bumped each vfs_lod_pak hit on this pak */
+};
+```
+So `vfs_lod_pak` returns `g_pix_file_names[PakEntry.pix_file_idx].loaded + PakEntry.start_frame`.
+NOTE: `start_frame` (+0x14) is added directly to a byte pointer, so for the records
+geo_build_mesh consumes it behaves as a **byte offset** into the loaded PAK — its
+relationship to the `.pix` text "start_frame" value still needs an empirical check
+against real PAK bytes (the leading 0x22-before-OEG byte means offset 0 ≠ the 'O').
 
-Not yet reversed. Known facts from file inspection:
-- Paired 1:1 with .pix files by base name
-- Binary, variable size (35 bytes for a `16`-tier file up to ~8KB for `g`-tier)
-- `g`-tier PAKs appear to start with a 4-byte magic (`0x22 0x4F 0x45 0x47`)
-  followed by a null-terminated GEO name — same name as referenced by the PIX
-- `16`-tier PAKs are much smaller and have no obvious ASCII header
-- `vfs_lod_pak()` reads these at runtime using the PakEntry to locate the
-  correct frame range
+### PAK File Format (binary) — partially reversed by inspection (2026-06-13)
+
+CORRECTION: PAKs do NOT contain "pre-rendered sprite pixel data". Confirmed by
+extracting real pairs:
+
+- **g-tier** (e.g. `a1flag1g.pak`, 656 B): a record per PIX entry; each record is
+  `[1-byte header 0x22]` + an **`OEG.` 3D mesh** (`2e47454f`) + null-terminated GEO
+  name (`A11_BAS1`) + mesh body. This is the geometry `geo_build_mesh` decodes.
+- **16-tier** (e.g. `a2fnsg16.pak`, 35 B for a 1038-"frame" entry): a tiny
+  **parametric far-LOD descriptor** — `[0x15]` header then ~30 bytes of params. NOT
+  bitmaps; far too small to be sprite frames. Leading byte differs from g-tier.
+
+So the LOD tiers are: **g = full 3D mesh, m = reduced mesh, 16 = a compact
+parametric billboard/impostor**. There is no directly-blittable 2D sprite asset.
+
+UNRESOLVED off-by-one: the g-tier record's `OEG.` magic sits at byte **+1** (after
+the 0x22), but `geo_build_mesh` checks the magic at `*param_1`. So either PakEntry's
+offset (+0x14) is 1-based past the header, or there's a +1 between vfs_lod_pak's
+return and geo_build_mesh that the decompile flattened. CONFIRM BY: dump the actual
+runtime pointer, or reverse pix_init's PakEntry offset computation.
 
 ---
 

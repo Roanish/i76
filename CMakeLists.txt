@@ -114,7 +114,11 @@ set_target_properties(i76 PROPERTIES
 # -------------------------------------------------------------------------
 
 add_executable(smk_dump tools/smk_dump.c ${LIBSMACKER_SOURCES})
-add_executable(zfs_dump tools/zfs_dump.c)
+
+# zfs_dump shares the engine's ZFS reader so it decompresses exactly like the game.
+add_executable(zfs_dump tools/zfs_dump.c src/engine/zfs.c)
+target_include_directories(zfs_dump PRIVATE src/ ${LZO2_INCLUDE_DIRS})
+target_link_libraries(zfs_dump PRIVATE ${LZO2_LIBRARIES})
 
 set(BROWSER_ENGINE_SOURCES
     src/engine/fs.c

@@ -48,9 +48,28 @@ typedef enum {
     PLATFORM_EVENT_KEY_UP,
 } PlatformEventType;
 
+/*
+ * Platform-neutral key codes.
+ *
+ * The original game read raw Win32 VK_ codes; we don't want SDL_Keycode (or
+ * any OS key enum) leaking past the HAL boundary, so platform_sdl.c translates
+ * its native keys into these. Add entries here as the game needs more keys —
+ * everything above the HAL refers to keys only by PlatformKey.
+ */
+typedef enum {
+    PK_UNKNOWN = 0,
+    PK_ESCAPE,
+    PK_RETURN,
+    PK_SPACE,
+    PK_UP, PK_DOWN, PK_LEFT, PK_RIGHT,
+    PK_W, PK_A, PK_S, PK_D,
+    PK_P,
+    PK_COUNT
+} PlatformKey;
+
 typedef struct {
     PlatformEventType type;
-    int               key;      /* SDL_Keycode for now */
+    PlatformKey       key;      /* PK_UNKNOWN for keys we don't translate */
 } PlatformEvent;
 
 /* ------------------------------------------------------------------ */

@@ -82,10 +82,33 @@ void platform_shutdown(void)
  * Event loop
  * ----------------------------------------------------------------------- */
 
+/*
+ * Translate an SDL keycode into a platform-neutral PlatformKey.
+ * Keys we don't care about map to PK_UNKNOWN and are ignored upstream.
+ */
+static PlatformKey translate_key(SDL_Keycode sym)
+{
+    switch (sym) {
+        case SDLK_ESCAPE: return PK_ESCAPE;
+        case SDLK_RETURN: return PK_RETURN;
+        case SDLK_SPACE:  return PK_SPACE;
+        case SDLK_UP:     return PK_UP;
+        case SDLK_DOWN:   return PK_DOWN;
+        case SDLK_LEFT:   return PK_LEFT;
+        case SDLK_RIGHT:  return PK_RIGHT;
+        case SDLK_w:      return PK_W;
+        case SDLK_a:      return PK_A;
+        case SDLK_s:      return PK_S;
+        case SDLK_d:      return PK_D;
+        case SDLK_p:      return PK_P;
+        default:          return PK_UNKNOWN;
+    }
+}
+
 bool platform_pump_events(PlatformEvent *evt)
 {
     evt->type = PLATFORM_EVENT_NONE;
-    evt->key  = 0;
+    evt->key  = PK_UNKNOWN;
 
     SDL_Event sdl_evt;
     if (!SDL_PollEvent(&sdl_evt))
@@ -93,6 +116,11 @@ bool platform_pump_events(PlatformEvent *evt)
 
     switch (sdl_evt.type) {
 
+        /*
+         * Hard quit: the window was closed by the OS / WM. ESC is NOT handled
+         * here any more — it's reported as an ordinary key so the game layer
+         * decides what it means (quit from gameplay, back out of a menu, ...).
+         */
         case SDL_QUIT:
             evt->type = PLATFORM_EVENT_QUIT;
             s_running = false;
@@ -100,17 +128,12 @@ bool platform_pump_events(PlatformEvent *evt)
 
         case SDL_KEYDOWN:
             evt->type = PLATFORM_EVENT_KEY_DOWN;
-            evt->key  = sdl_evt.key.keysym.sym;
-            if (sdl_evt.key.keysym.sym == SDLK_ESCAPE) {
-                evt->type = PLATFORM_EVENT_QUIT;
-                s_running = false;
-                return false;
-            }
+            evt->key  = translate_key(sdl_evt.key.keysym.sym);
             return true;
 
         case SDL_KEYUP:
             evt->type = PLATFORM_EVENT_KEY_UP;
-            evt->key  = sdl_evt.key.keysym.sym;
+            evt->key  = translate_key(sdl_evt.key.keysym.sym);
             return true;
 
         default:
