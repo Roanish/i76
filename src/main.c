@@ -31,12 +31,14 @@
 #include "engine/cmdline.h"
 #include "engine/fs.h"
 #include "engine/vfs.h"
+#include "engine/pix.h"
 #include "engine/strlookup.h"
 #include "engine/pcx.h"
 #include "engine/video.h"
 #include "engine/loop.h"
 #include "engine/meshcache.h"
 #include "engine/meshview.h"
+#include "engine/sceneview.h"
 #include "render/render.h"
 
 /* -----------------------------------------------------------------------
@@ -76,8 +78,13 @@ int main(int argc, char *argv[])
     /* --meshview: dev tool — browse decoded OEG meshes instead of running the
      * game. Handled here (not in cmdline.c) since it's a developer entry point. */
     bool mesh_view = false;
-    for (int i = 1; i < argc; i++)
+    const char *scene_view = NULL;   /* mission path, or NULL */
+    for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--meshview") == 0) mesh_view = true;
+        else if (strcmp(argv[i], "--sceneview") == 0)
+            scene_view = (i + 1 < argc && argv[i+1][0] != '-') ? argv[++i]
+                                                               : "miss8/N01.CBT";
+    }
 
     /* -------------------------------------------------------------- */
     /* Asset root                                                       */
@@ -90,6 +97,15 @@ int main(int argc, char *argv[])
 
     if (!vfs_init())
         fprintf(stderr, "[main] VFS init failed — ZFS assets unavailable.\n");
+
+    /* -------------------------------------------------------------- */
+    /* PIX/PAK index                                                    */
+    /* Original: pix_init() during session setup. Globs every *.pix and */
+    /* builds the global record->pak index so a bare mesh name resolves */
+    /* to its bytes inside a packed .pak (see pix.c).                    */
+    /* -------------------------------------------------------------- */
+
+    pix_init();
 
     /* -------------------------------------------------------------- */
     /* Mesh cache                                                       */
@@ -162,7 +178,7 @@ int main(int argc, char *argv[])
     /* Any keypress skips. Not found = silently continue.              */
     /* -------------------------------------------------------------- */
 
-    if (!mesh_view) {
+    if (!mesh_view && !scene_view) {
         video_play("smk/introf01.smk");
         video_play("smk/credf01.smk");
     }
@@ -196,7 +212,11 @@ int main(int argc, char *argv[])
     /* active state's runner and loops until something sets GS_QUIT.    */
     /* -------------------------------------------------------------- */
 
-    if (mesh_view) {
+    if (scene_view) {
+        /* Developer entry point: render a mission's placed objects, then exit. */
+        fprintf(stdout, "[main] --sceneview: %s\n", scene_view);
+        sceneview_run(scene_view);
+    } else if (mesh_view) {
         /* Developer entry point: browse decoded OEG meshes, then exit. */
         fprintf(stdout, "[main] --meshview: entering mesh viewer.\n");
         meshview_run();

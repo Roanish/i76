@@ -1,0 +1,60 @@
+#ifndef SCENE_H
+#define SCENE_H
+
+#include <stdint.h>
+
+#include "engine/geomesh.h"
+
+/*
+ * scene.h — a world scene built from a mission file's placed objects.
+ *
+ * Parses an I'76 mission file (e.g. miss8/N01.CBT), walks ODEF -> OBJ records,
+ * and turns each placed object into one or more renderable items. The OBJ
+ * record layout (confirmed from object_alloc, FUN_004b3e20):
+ *   +0x00 name[16]   +0x08 3x3 orientation   +0x2c world position   +0x5c type
+ * For a structure object the name resolves to a <name>.sdf whose SGEO chunk
+ * lists part meshes (each with a structure-LOCAL transform); we compose
+ * object-world * part-local and resolve each part mesh through the PIX/PAK
+ * index. Marker objects (spawn/regen, no .sdf) become mesh-less items.
+ */
+
+typedef struct {
+    const GeoMesh *mesh;   /* renderable mesh, or NULL for a marker        */
+    float R[9];            /* world 3x3 orientation (row-major)            */
+    float t[3];            /* world position                               */
+    int   type;            /* OBJ type code                                */
+    char  name[16];
+} SceneItem;
+
+/*
+ * A terrain patch: one 128x128 heightfield tile placed at a coarse-grid cell.
+ * The mission TDEF/ZMAP is a sparse 80x80 grid of zone indices (0xff = empty);
+ * each non-empty cell gets one zone slab from the .TER file. Scale is derived
+ * empirically (see scene.c): coarse cell = 640 world units, so fine cell = 5.
+ * Cell (fz,fx) -> world x = origin[0]+fx*cell, z = origin[1]+fz*cell,
+ *                 y = heights[fz*dim+fx] * (height scale, applied at render).
+ */
+typedef struct {
+    float    origin[2];    /* world (x,z) of the patch's min corner        */
+    int      dim;          /* cells per side (128)                          */
+    float    cell;         /* world units per fine cell (5.0)               */
+    uint8_t *heights;      /* dim*dim height bytes (byte0 of each .TER cell) */
+    int      zone;
+} TerrainPatch;
+
+typedef struct {
+    SceneItem    *items;
+    int           count;
+    TerrainPatch *patches;
+    int           patch_count;
+    float         center[3];  /* scene centroid (camera target)            */
+    float         radius;     /* bounding radius about center              */
+} Scene;
+
+/* Load a mission file (path relative to the asset root, e.g. "miss8/N01.CBT").
+ * Returns NULL on failure. Acquires meshes via the mesh cache. */
+Scene *scene_load_mission(const char *path);
+
+void scene_free(Scene *s);
+
+#endif /* SCENE_H */

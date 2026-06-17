@@ -19,33 +19,39 @@ for Linux and modern Windows, Vulkan based and (hopefully) upscaled models and t
 | Mesh cache | Working — faithful GEO mesh cache (dual index, refcount, LRU); self-test passes |
 | GEO/OEG mesh decode | Working — decodes OEG meshes (verts + faces) from decompressed assets (`geomesh.c`) |
 | Mesh viewer | Working — `./i76 --meshview` browses decoded meshes as a rotating software wireframe |
-| Game world / objects | Reversed (not yet built) — mission→ODEF→OBJ placement chain + entity creator located; `world.c` seam still a debug marker |
-| 3D renderer | Not started — Vulkan backend only does a fullscreen 8-bit blit (viewer rasterizes wireframe on the CPU) |
+| PIX/PAK index | Working — `pix.c` globs all `*.pix`, builds a global record→pak index; `vfs_lod(name)` resolves a bare record name to its bytes (mirrors `pix_init`/`vfs_lod_pak`). Indexes ~23.5k records |
+| Object placement | Reversed + verified — mission OBJ record holds the world transform (3×3 orient @+0x08, position @+0x2c); `object_alloc` bakes it into the entity. Confirmed against real mission bytes |
+| Scene viewer | Working — `./i76 --sceneview [mission]` parses a mission's placed objects, resolves each structure's `.sdf` part meshes, and draws them at their world transforms (orbit camera, software wireframe) |
+| Terrain | Working (uncalibrated) — `.TER` zone heightfields (128×128 cells) rendered under the objects via the sparse 80×80 zone grid; horizontal scale solid (640/cell), height scale a tunable |
+| 3D renderer | Not started — Vulkan backend only does a fullscreen 8-bit blit (viewers rasterize wireframe on the CPU) |
 | Audio | Not started |
-| Terrain / world | Not started |
 | Vehicles / physics | Not started |
 | AI / combat | Not started |
 | Multiplayer | Not started |
 
 ## Immediate TODO
 
-The mission→object placement chain is now reversed (see `docs/REVERSING.md`
-"Mission file & object placement"); next steps build on it:
+Object placement and terrain are reversed and rendering in the scene viewer
+(`docs/REVERSING.md` "Mission file & object placement"); next steps:
 
-1. **Object placement format** — dump the `OBJ` sub-chunk table (`DAT_00504958`, 6 entries)
-   to pin the exact transform/field layout, so object positions can be parsed straight
-   out of a mission file (and the viewer extended into a *scene* viewer).
-2. **Entity store** — build out `world.c` against the reversed creator (`FUN_00453d50`,
-   "cannot create entity") + object allocator (`FUN_004b3e20`): the live object struct
-   and the list `world_tick` should iterate.
-3. **Minimal 3D renderer** — the Vulkan backend only does a fullscreen blit; a real 3D
-   pass replaces the CPU wireframe in the mesh viewer and is the path to drawing scenes.
+1. **Terrain placement / height calibration (active task)** — the `.TER` height-byte →
+   world-Y scale is an uncalibrated tunable (objects aren't ground-snapped, so it can't be
+   derived from them; the runtime terrain sampler isn't reachable by xref). Objects render
+   above/below the surface (e.g. a bridge buried in a slope at the default scale). Suspect
+   the zone-grid origin/indexing or the orientation+scale, not the placement. Horizontal
+   scale (640 units/coarse cell, 5/fine cell) is solid.
+2. **Minimal 3D renderer** — the Vulkan backend only does a fullscreen blit; a real 3D
+   pass replaces the CPU wireframe in the mesh/scene viewers and is the path to filled,
+   textured scenes (apply the terrain `material` byte + mesh textures).
+3. **Entity store** — build out `world.c` against the reversed creator (`entity_spawn`,
+   "cannot create entity") + `object_alloc`: the live object struct and the list
+   `world_tick` should iterate.
 
 Also outstanding:
 
-4. Reverse NITSHELL.DLL callback table (32 entries at `&local_80` in `game_session_run`) — needed to write our own ShellMain replacement
-5. Stub our own ShellMain that returns `shell_result=2` with a hardcoded scenario name, so we can reach the gameplay state
-6. Wire font selection by video mode (`DAT_005fb0e0`: 6→base6x74, 7→base6x7, else→base6x76)
+5. Reverse NITSHELL.DLL callback table (32 entries at `&local_80` in `game_session_run`) — needed to write our own ShellMain replacement
+6. Stub our own ShellMain that returns `shell_result=2` with a hardcoded scenario name, so we can reach the gameplay state
+7. Wire font selection by video mode (`DAT_005fb0e0`: 6→base6x74, 7→base6x7, else→base6x76)
 
 ## Goals
 
@@ -100,6 +106,9 @@ i76/
 │   │   ├── meshcache.c/h       # GEO mesh cache — dual index, refcount, LRU eviction
 │   │   ├── geomesh.c/h         # OEG mesh decode — verts + face index lists
 │   │   ├── meshview.c/h        # In-engine mesh viewer (--meshview): software wireframe
+│   │   ├── pix.c/h             # Global PIX/PAK record index; vfs_lod(name) resolver
+│   │   ├── scene.c/h           # Mission loader — OBJ placement + .sdf parts + .TER terrain
+│   │   ├── sceneview.c/h       # In-engine scene viewer (--sceneview): objects + terrain
 │   │   ├── pcx.c/h             # PCX image loader (8-bit palettised)
 │   │   ├── strlookup.c/h       # StrLookup stub (reimplements strlkup.dll API)
 │   │   ├── video.c/h           # Smacker video playback
@@ -141,6 +150,11 @@ i76/
 ```bash
 # Browse decoded OEG meshes in-engine (rotating wireframe; LEFT/RIGHT cycle, ESC quit)
 ./i76 --meshview
+
+# Render a mission's placed objects + terrain (orbit camera)
+#   default mission miss8/N01.CBT, or pass one: ./i76 --sceneview miss8/N01.CBT
+#   LEFT/RIGHT orbit, UP/DOWN zoom, SPACE cycle terrain height-scale, P cycle orientation
+./i76 --sceneview
 ```
 
 ## Credit
@@ -156,9 +170,10 @@ See [`docs/REVERSING.md`](docs/REVERSING.md) for everything deduced from the ori
 binary. Covers: entry points, game state machine, ZFS archive format, VFS layer +
 asset load chain (`vfs_lod` → PAK/cached → file cache), the GEO mesh cache + OEG mesh
 format, the mission file format and object placement chain (mission → ODEF → OBJ →
-entity creator), the chunk/IFF reader, the object→model registry, the PIX/PAK system,
-renderer abstraction (NITSHELL.DLL), font system, audio, and all known globals and
-function addresses.
+entity creator; per-instance world transform in the OBJ record), the terrain system
+(TDEF/ZMAP zone grid + `.TER` zone heightfields), the chunk/IFF reader, the
+object→model registry, the PIX/PAK system, renderer abstraction (NITSHELL.DLL), font
+system, audio, and all known globals and function addresses.
 
 ## Original Binary
 

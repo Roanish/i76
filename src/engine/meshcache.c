@@ -24,6 +24,7 @@
 #include <string.h>
 
 #include "engine/vfs.h"
+#include "engine/pix.h"
 #include "engine/geomesh.h"
 
 /* ----------------------------------------------------------------------- */
@@ -189,10 +190,13 @@ static void make_room(size_t need)
 static void *default_loader(const char *name, size_t *out_size)
 {
     /*
-     * TODO: the original vfs_lod resolves a LOD-suffixed filename before
-     * reading. We don't have that reversed, so we read `name` directly.
+     * vfs_lod resolves a bare record name (e.g. "AN1ABLD1") through the global
+     * PIX/PAK index, extracting the record's bytes from its owning pak; if the
+     * name isn't an indexed record it falls back to a loose VFS file (so whole
+     * ".pak"/".geo" filenames still load directly). Mirrors the original's
+     * vfs_lod -> vfs_lod_pak / vfs_lod_cached dispatch.
      */
-    return vfs_read_file(name, out_size);
+    return vfs_lod(name, out_size);
 }
 
 static void default_free(void *buf)

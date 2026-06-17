@@ -481,7 +481,41 @@ mission file
 └─ DAT_00506208 (7): WDEF TDEF RDEF ODEF LDEF ADEF EXIT   (handlers FUN_004bd450..4f0, thin wrappers)
      └─ ODEF → FUN_004b3630 → DAT_00504928 (3): OREV, OBJ(array, flag 0x400), EXIT
                                    └─ OBJ → FUN_004b3660  (reads ONE placed object)
+                                        └─ DAT_00504958 (6): SDFC SOBJ SGEO SCHK LOBJ EXIT
 ```
+
+**OBJ sub-chunk table `DAT_00504958`** (decoded 2026-06-14 from the raw bytes). Each entry is
+0x10 bytes (`+0x00` tag, `+0x04` zero, `+0x08` handler, `+0x0c` flags); the OBJ record is itself
+a nested chunk stream over these:
+
+| tag | handler | flags | note |
+|-----|---------|-------|------|
+| `SDFC` | `FUN_004b3b60` | `0x0800` | singleton |
+| `SOBJ` | `FUN_004b4060` | `0x0800` | singleton |
+| `SGEO` | `FUN_004b3be0` | `0x0800` | singleton |
+| `SCHK` | `FUN_004b3c40` | `0x0c00` | counted array (`0x400`) |
+| `LOBJ` | `FUN_004b4ab0` | `0x0c00` | counted array |
+| `EXIT` | `FUN_004bd190` | `0x1000` | terminator |
+
+(This corrects an earlier note that guessed `SDFC/SOBJ/SGEO` were a separate `.sdf` parser —
+they are this table.)
+
+**`SGEO` part hierarchy — CONFIRMED (2026-06-17, from `SGEO`/`FUN_004b3be0` + `FUN_004b33a0`).**
+`SGEO` (`FUN_004b3be0`) reads a `count` at payload `+8`, then builds **6 group pointers** (records
+begin at `+0xc`), each group = `count` parts of **0x78 bytes**, and hands them to
+`FUN_004b33a0(groups, parent, 3, 2, count, 0)`. That builder iterates a **3 (LOD) × 2 (variant) ×
+`count` (slot)** grid: it creates one part **object per slot** (only on the first LOD+variant pass,
+via `object_alloc`) and reuses it across LOD/variant groups, which only swap the mesh (`FUN_004b3060`
+derives the per-LOD/variant mesh name from the slot's 8-byte base name + the two axis indices;
+`FUN_00438930` binds it). **Each 0x78 part record carries a PARENT name at `+0x38`** (`"WORLD"` =
+the object root `parent`, else a sibling part looked up by `FUN_004bd6f0`; fatal "Can't find parent
+%s for object %s"). `object_alloc(parent_entity, record, …)` links the parts into a **transform
+hierarchy** — a part's `+0x08` 3×3 / `+0x2c` translation is **relative to its parent**, so a multi-
+part structure must compose each part up its parent chain, not place every part against the object
+root. (Bridge `bewdbrg2`: SPN parent `WORLD`; road/rails/arches parent SPN. Placing all parts at the
+root was the scene-viewer's bridge-misalignment bug — fixed in `scene.c expand_sdf`.) Part record
+0x78 layout: `+0x00` base name[8], `+0x08` 3×3, `+0x2c` translation, `+0x38` parent name[8],
+`+0x4c` bounding radius, `+0x50` bbox half-extent (xyz), `+0x5c` type (0x51 = special/anchor).
 
 **`FUN_004b3660`** (the per-OBJ reader) is the placement reader and the entry to entity
 creation:
@@ -489,7 +523,9 @@ creation:
    "Object found with no geometry").
 2. Type-1 named markers: name `spawn`/`regen` → `FUN_0044c4a0`; `check` → `FUN_00444ad0`.
 3. Object **type code** (`+0x64`) switch → `FUN_004b3e20(...)` allocates the object struct
-   (the entity). Richer types parse sub-table `DAT_00504958` (6 entries) for per-object fields.
+   (the entity). Richer types parse sub-table `DAT_00504958` (6 entries, decoded above) for
+   per-object fields — the 48-byte transform is populated *by* one of those handlers, not
+   read flat.
 4. Builds a **48-byte transform** (`local_88`, likely a 3×4 matrix = 12 floats) via
    `FUN_004b3db0`, then **`FUN_00453d50(entity, transform, …)`** spawns it into the world
    (fatal "I'76 Nitro Pack cannot create entity") — **this is the entity-store insert** —
@@ -1115,10 +1151,13 @@ struct PixFile {            /* stride 0x18 */
 };
 ```
 So `vfs_lod_pak` returns `g_pix_file_names[PakEntry.pix_file_idx].loaded + PakEntry.start_frame`.
-NOTE: `start_frame` (+0x14) is added directly to a byte pointer, so for the records
-geo_build_mesh consumes it behaves as a **byte offset** into the loaded PAK — its
-relationship to the `.pix` text "start_frame" value still needs an empirical check
-against real PAK bytes (the leading 0x22-before-OEG byte means offset 0 ≠ the 'O').
+CONFIRMED 2026-06-14 (empirically, via our reimplemented pix index over real data): the `.pix`
+text "start_frame"/"frame_count" columns are **byte offset / byte length into the DECOMPRESSED
+pak**, NOT frame indices. The offsets land exactly on the OEG record boundaries (e.g.
+`AN1ABLD1.geo 8316 2772` → the OEG magic sits at byte 8316 of anbunk1g.pak, length 2772; the last
+entry's off+len equals the decompressed pak size). Our `vfs_lod()` (src/engine/pix.c) reproduces
+this and resolves 23507 records across 1758 paks. The earlier "0x22-before-OEG" worry was the LZO
+marker on the *compressed* bytes — irrelevant once decompressed.
 
 ### PAK File Format (binary) — partially reversed by inspection (2026-06-13)
 
