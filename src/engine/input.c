@@ -77,3 +77,33 @@ void input_poll(InputState *out)
     }
     out->quit = quit;
 }
+
+/* Raw per-key state, persisted between frames (separate from the semantic set). */
+static bool s_raw_held[PK_COUNT];
+static bool s_raw_prev[PK_COUNT];
+
+void input_poll_raw(RawInputState *out)
+{
+    memcpy(s_raw_prev, s_raw_held, sizeof(s_raw_held));
+
+    bool quit = false;
+    for (;;) {
+        PlatformEvent e;
+        if (!platform_pump_events(&e)) { quit = true; break; }
+        if (e.type == PLATFORM_EVENT_NONE) break;
+
+        if (e.type == PLATFORM_EVENT_KEY_DOWN && e.key == PK_ESCAPE)
+            quit = true;
+
+        if (e.key > PK_UNKNOWN && e.key < PK_COUNT) {
+            if (e.type == PLATFORM_EVENT_KEY_DOWN)    s_raw_held[e.key] = true;
+            else if (e.type == PLATFORM_EVENT_KEY_UP) s_raw_held[e.key] = false;
+        }
+    }
+
+    for (int i = 0; i < PK_COUNT; i++) {
+        out->held[i]    = s_raw_held[i];
+        out->pressed[i] = s_raw_held[i] && !s_raw_prev[i];
+    }
+    out->quit = quit;
+}

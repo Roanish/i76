@@ -42,13 +42,26 @@ typedef struct {
     int      zone;
 } TerrainPatch;
 
+/* One road cross-section "rib" (RDEF/RSEG): two edge points in the XZ plane.
+ * The road has no stored Y — it drapes onto the terrain. Consecutive ribs form
+ * the road ribbon (quad strip). See docs/REVERSING.md "RDEF / road segments". */
+typedef struct {
+    float lx, lz;   /* left edge  (rib +0x00 X, +0x04 Z) */
+    float rx, rz;   /* right edge (rib +0x0c X, +0x08 Z) */
+} RoadRib;
+
 typedef struct {
     SceneItem    *items;
     int           count;
     TerrainPatch *patches;
     int           patch_count;
+    RoadRib      *road;        /* RSEG road ribs (NULL if none)             */
+    int           road_count;
     float         center[3];  /* scene centroid (camera target)            */
     float         radius;     /* bounding radius about center              */
+    /* WDEF->WRLD terrain texture set (empty if the mission has no WDEF). */
+    char          palette_name[16];  /* e.g. "t15.act"      (terrain palette)  */
+    char          ground_tex[16];    /* e.g. "tt161sd_.map" (ground texture)   */
 } Scene;
 
 /* Load a mission file (path relative to the asset root, e.g. "miss8/N01.CBT").

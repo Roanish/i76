@@ -26,6 +26,8 @@
 
 #include <stdbool.h>
 
+#include "platform/platform.h"   /* PlatformKey / PK_COUNT for raw input */
+
 typedef enum {
     INPUT_BTN_UP,       /* accelerate / forward  (Up / W)    */
     INPUT_BTN_DOWN,     /* brake / reverse       (Down / S)  */
@@ -54,5 +56,20 @@ void input_init(void);
  * Call exactly once per frame, before updating the world.
  */
 void input_poll(InputState *out);
+
+/*
+ * Raw per-physical-key snapshot, indexed by PlatformKey. This is the low-level
+ * counterpart to input_poll() for tools (e.g. the free-fly world viewer) that
+ * need every key independently rather than the game's abstract drive actions.
+ * Like input_poll() it drains the event queue, so a frame uses ONE of the two,
+ * not both. Held state persists in separate file-static storage.
+ */
+typedef struct {
+    bool held[PK_COUNT];
+    bool pressed[PK_COUNT];
+    bool quit;
+} RawInputState;
+
+void input_poll_raw(RawInputState *out);
 
 #endif /* INPUT_H */

@@ -301,6 +301,55 @@ static void load_terrain(Scene *s, const uint8_t *d, long sz, const char *missio
             terpath, nzones, s->patch_count);
 }
 
+/* Read the WDEF->WRLD terrain texture set: the palette (name[0]) and ground
+ * texture (name[6]). The 8 asset names are a 13-byte-stride array at WRLD+0x26
+ * (see docs/REVERSING.md "World definition (WDEF -> WRLD)"). */
+static void load_world_textures(Scene *s, const uint8_t *d, long sz)
+{
+    long wdef = find_chunk(d, 0, sz, "WDEF");
+    if (wdef < 0) return;
+    uint32_t wlen = rd_u32(d + wdef + 4);
+    long wrld = find_chunk(d, wdef + 8, wdef + (long)wlen, "WRLD");
+    if (wrld < 0) return;
+
+    long names = wrld + 0x26;            /* name[i] at +0x26 + i*13 */
+    if (names + 8 * 13 > sz) return;
+    const char *n = (const char *)(d + names);
+    snprintf(s->palette_name, sizeof s->palette_name, "%.12s", n + 0 * 13);
+    snprintf(s->ground_tex,   sizeof s->ground_tex,   "%.12s", n + 6 * 13);
+    fprintf(stderr, "[scene] world: palette '%s', ground '%s'\n",
+            s->palette_name, s->ground_tex);
+}
+
+/* Parse RDEF -> RSEG: the road network. RSEG payload = [u32 ?][u32 count] then
+ * `count` 24-byte ribs (left edge X@+0/Z@+4, right edge Z@+8/X@+0x0c, +0x10 flag,
+ * +0x14 z). RSEG loader FUN_004b4370 copies these verbatim. See REVERSING.md. */
+static void load_roads(Scene *s, const uint8_t *d, long sz)
+{
+    long rdef = find_chunk(d, 0, sz, "RDEF");
+    if (rdef < 0) return;
+    uint32_t rlen = rd_u32(d + rdef + 4);
+    long rseg = find_chunk(d, rdef + 8, rdef + (long)rlen, "RSEG");
+    if (rseg < 0) return;
+
+    long p = rseg + 8;                       /* chunk payload */
+    uint32_t count = rd_u32(d + p + 4);      /* +0 = ?, +4 = rib count */
+    long recs = p + 8;
+    if (count == 0 || count > 200000) return;
+    if (recs + (long)count * 24 > sz) return;
+
+    s->road = malloc(sizeof(RoadRib) * count);
+    s->road_count = (int)count;
+    for (uint32_t i = 0; i < count; i++) {
+        const uint8_t *r = d + recs + (size_t)i * 24;
+        s->road[i].lx = rd_f32(r + 0x00);
+        s->road[i].lz = rd_f32(r + 0x04);
+        s->road[i].rz = rd_f32(r + 0x08);
+        s->road[i].rx = rd_f32(r + 0x0c);
+    }
+    fprintf(stderr, "[scene] roads: %d ribs\n", s->road_count);
+}
+
 /* ----------------------------------------------------------------------- */
 /* Mission load                                                              */
 /* ----------------------------------------------------------------------- */
@@ -362,6 +411,8 @@ Scene *scene_load_mission(const char *path)
     s->count = iv.n;
 
     load_terrain(s, d, sz, path);
+    load_world_textures(s, d, (long)sz);
+    load_roads(s, d, (long)sz);
     free(d);
 
     /* Centroid + radius over item positions. */
@@ -414,6 +465,7 @@ void scene_free(Scene *s)
     for (int i = 0; i < s->patch_count; i++)
         free(s->patches[i].heights);
     free(s->patches);
+    free(s->road);
     free(s->items);
     free(s);
 }

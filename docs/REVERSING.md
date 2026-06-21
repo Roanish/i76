@@ -439,12 +439,21 @@ Decompressed OEG layout (`param_1` points at byte 0 = the magic; **no lead byte*
 0x24  vec3f  posA[nVerts]   (12B each — positions; copied to out+0x18 region)
       vec3f  posB[nVerts]   (12B each — 2nd vertex set, normals? copied to out+...)
       faces[nFaces]:        (start = (nVerts*6+9)*4 from base)
-        +0x04 u32 nFaceVerts
+        +0x04 u32   nFaceVerts
+        +0x08 3×u8  face colour (R?,G?,B? -> palette idx via FUN_0046ce50; untextured faces)
+        +0x0b 4×f32 face plane (normal xyz + d; used for BSP split)
+        +0x1f u8 / +0x20 u8 / +0x21 u8   facemask hi / lo / two-sided flag
+        +0x22 char texname[16]   TEXTURE NAME (empty = untextured; no '.' => engine
+                                 appends ".tmt" primary / ".map" fallback, see below)
         +0x37 entry[nFaceVerts], 0x10B each:
               +0x00 u32 vertex index (into posA)
-              +0x04 3×dword (uv / per-vertex data)
+              +0x04 u32 per-vertex attr (shade/normal? unconfirmed)
+              +0x08 f32 U
+              +0x0c f32 V
         record size = 0x37 + nFaceVerts*0x10
 ```
+(Full face/UV layout decoded 2026-06-19 from `geo_build_mesh` (FUN_0043aa60); all
+offsets cross-check against `obj_model_draw`'s in-memory reads — see below.)
 A `.pak` holds **multiple** OEG records (the tank pak is 17386B; the first mesh ends at
 3831). `vfs_lod_pak` returns `pak_base + PakEntry[+0x14]` to select a specific named
 record. So a full vehicle = several OEG records (hull/turret/wheels/etc.) acquired by name.
@@ -454,8 +463,138 @@ not 592) — it isn't decompressing on the `get` path (works via `zfs_read` thou
 that to extract the real bytes). `vfs_lod_cached` correctly sizes by `vfs_get_uncompressed_size`
 and `vfs_read_file` decompresses into the buffer — the engine path was always right.
 
-Cross-loader helper `FUN_004679b0` is a generic name/resolve check (used by both mesh
-and audio loaders), NOT texture-specific.
+### OEG in-memory mesh struct (`geo_build_mesh` output, consumed by `obj_model_draw`) — 2026-06-19
+The runtime mesh (distinct from the on-disk layout above; this is what the renderer walks):
+```
+mesh:  +0x04 u32 vertCount   +0x0c posA ptr   +0x10 posB ptr   +0x14 first face
+face node:
+  +0x04 u32 nFaceVerts
+  +0x08 u8  colour idx (FUN_0046ce50 of the 3 on-disk colour bytes)
+  +0x0c..0x18  4 f32 plane (normal+d)
+  +0x1c/+0x1d  facemask indices (-> g_render_facemask_tbl)   +0x1e two-sided
+  +0x20 char texname[16]   (handed to face_texture_bind)
+  +0x30 next face ptr
+  +0x34..0x3c  3 f32 face centroid (avg of verts; BSP sort key)
+  +0x40 + i*0x10  vertex entries: +0x00 idx, +0x04 attr, +0x08 U, +0x0c V
+```
+`obj_model_draw` (FUN_00498520) is a GENERIC mesh drawer: `mesh = entity+0x5c`; transforms
+verts via `mesh_transform_verts`, walks the face list, emits `[x,y,z,u,v,0.9]` per vertex,
+binds the per-face texture, rasters via `raster_poly`. The `0x3f666666` = 0.9 shade/w const.
+
+### Mesh texture resolution chain — REVERSED 2026-06-19
+A face's 16-byte `texname` (no extension) is resolved like this:
+- `geo_build_mesh` appends an extension: **`.tmt` primary**, **`.map` fallback** (consts
+  `DAT_004f3a58` = ".tmt", `DAT_004f3a50` = ".map"); it keeps a 1-entry cache
+  (`g_current_tex_name` / `g_has_current_tex`) to avoid re-resolving the same name.
+- `texture_resolve` (FUN_004679b0): lowercase the 16-byte name, then
+  `FUN_004682e0` (cache find) else `FUN_004bfb10`.
+- `FUN_004bfb10`: `bsearch(name, DAT_005e5ee0, DAT_005e5ee4, 0x30, pak_entry_cmp)` —
+  i.e. **a FILE-EXISTENCE check in the global VFS index** (NOT a texture decode).
+- So ".tmt then .map" means *"use `<name>.tmt` if that file exists, else `<name>.map`."*
+  Texture pixels are loaded **lazily at draw time** by `face_texture_bind` (FUN_0043d070)
+  — that path (and the on-disk **`.tmt` format**) is NOT yet reversed. `.map` = 8-bit
+  indexed bitmap `[u32 w][u32 h] + w*h indices`; `.vqm` has `vqm_decode`.
+
+`DAT_005e5ee0` is the **global VFS file index**, built by `FUN_004be990` (vfs_index_build):
+reads a text manifest (`%d` count, then `%d %s` = `<id> <name>` lines), sets up VFS sources
+(`addon`, plus `miss8`/`miss16`/`Install\data\…` per `display_ready` + `FUN_004be700`),
+`qsort`s by name (`FUN_004bf090`), and dedupes into 0x30-byte records
+`{ char name[0x10]; u32 source_mask[8] }` — the 256-bit mask flags which sources hold the
+file. `DAT_005e5ee4` = unique count. (So the earlier note that `FUN_004679b0` is "a generic
+name/resolve check, not texture-specific" was right in spirit: it's a VFS existence query.)
+
+### Terrain is a TYPE 0x34 textured `obj_model` — CONFIRMED 2026-06-19
+`render_scene_full` (FUN_0044ebd0) walks the scene entity list (ctx `param_1[8]`, count
+`+0xc`, stride 0x10) twice: first renders all entities with `entity+0x6c != 0x34` through
+the normal subpart/BSP path; then **after** the BSP raster, a second pass draws **only**
+`entity+0x6c == 0x34` (TERRAIN) via plain `obj_model_draw` (mesh reached through
+`entity+0x70`). So terrain is a textured mesh like any other — **no separate terrain
+renderer or texture system**, and the `.TER` zone heightfield (loaded by `zone_load`,
+indexed in write-only `g_zone_table`/`g_zone_data_base`/`g_zone_map`) is NOT the visible
+ground (reference/collision only). "Terrain texturing" == general mesh texturing.
+
+### World definition (WDEF → WRLD) + terrain texture set — CONFIRMED 2026-06-20
+
+The visible terrain's textures/palette come from the mission **WDEF** chunk, not the `.TER`
+zone data. Chain: `WDEF` → `mission_wdef_handler` (004bd450) → `wdef_parse` (FUN_004b45c0,
+dispatches the 3-entry sub-table `DAT_00504af0` = `WREV`→004bd510 / `WRLD`→004b45f0 /
+`EXIT`→004bd190) → **`wrld_load` (FUN_004b45f0)** — body seen.
+
+`wrld_load` reads an **8-name array at payload `+0x26`, stride 13 bytes** (verified against
+N01.CBT file offsets 78,91,104,117,130,143,156,169):
+
+| off | N01 name | role |
+|----|----------|------|
+| +0x26 | `t15.act`       | terrain palette (768B) → `DAT_004fadb0` |
+| +0x33 | `t15.lum`       | luminance/shade table; `(*DAT_00653f44)(DAT_00653b40,0,0x100,pal,lum)` builds the shade LUT |
+| +0x40 | `t15.tbl`       | **translucency** LUT (0x4000 dwords = 256×256 blend table) → `DAT_00619a20`. NOT a tile atlas. |
+| +0x4d | `m01.npt`       | → `DAT_00652210` |
+| +0x5a | `nk_1cld2.map`  | sky/cloud texture → `DAT_00653ae0` |
+| +0x67 | `none.sdf`      | world structure ("none") → `FUN_004b40f0` |
+| +0x74 | `tt161sd_.map`  | **ground texture** → `FUN_004958c0` (terrain-texture loader; body not seen) |
+| +0x81 | `zmap6m00.map`  | overhead/mini-map → `DAT_005b2198` |
+
+Then copies 8×5-dword world-param records (`payload+0x9f` → `DAT_005fb500..0x5fb5a0`) and world
+transform/lighting floats (`payload+0x0c..0x25` → `DAT_00653f80..0x653f9c`); `DAT_004f36b4 =
+(float)payload+0x13f`. **Terrain texturing model: a single ground `.map` in the `t15.act`
+palette, shaded by `t15.lum`** — not a per-tile atlas. The ground `.map` lives in a pak
+(`tt161sd_` ∈ `tt16m.pak`; terrain sets `tt14m/16m/17m/18m`), so it loads via `vfs_lod`. The
+terrain MESH builder (height-byte→Y scale, UVs) is still unlocated — `wrld_load` only sets up
+textures/palette/params.
+
+**N01.CBT mission chunk tree** (BWD2 magic; `[tag][u32 len][payload]`, EXIT terminates):
+```
+WDEF 367   → WREV, WRLD(t15.act/lum/tbl, m01.npt, nk_1cld2.map, none.sdf, tt161sd_.map,
+                        zmap6m00.map, "Evening Stroll"), EXIT
+TDEF 6467  → TREV, ZMAP 6409, ZONE 22 → "n01.ter", EXIT      (heightfield = collision)
+RDEF 9524  → RREV, RSEG 9472                                  (road segments)
+ODEF 1000  → anbunkr1, bewdbrg2, regen, SPAWN×6               (placed objects)
+LDEF 28 / ADEF 36
+```
+
+### RDEF / road segments — DECODED 2026-06-21
+
+`RDEF` (mission body chunk) → `mission_rdef_handler` (004bd490) → `rdef_parse` (FUN_004b4340),
+which dispatches a 5-entry sub-table `DAT_00504b20`:
+
+```
+RREV → 004bd510   RSEG → 004b4370   ISEG → 0044dee0   TSEG → 0044dee0   EXIT → 004bd190
+```
+
+`RSEG` = road segments, `ISEG`/`TSEG` = intersection / T-junction pieces (shared handler `0044dee0`,
+not yet decoded). **`RSEG` loader `FUN_004b4370`** (body seen): reads `count` at payload `+0x0c`, then
+splits the rib array into ≤24-rib blocks (count halved until ≤24) with a 1-rib overlap, copies each
+block **verbatim** into a `0x2c`-header + `n*24`-byte node, and links them into the global road list
+`DAT_005e5008` (block: `[0]` id from `g`-counter `DAT_005e500c`, `[1]/[2]` next/prev, `[3]` flag (1 on
+last), `[4]` id, `[5]` rib count, `[10]` → rib data). It does **not** reinterpret the rib fields.
+
+**RSEG on-disk:** `[u32 ?=1][u32 count][ count × 24-byte ribs ]`. Each **24-byte rib** is a road
+cross-section in the XZ plane (no Y — roads drape on terrain):
+
+| off | type | role (from data; N01) |
+|----|----|----|
+| +0x00 | f32 | edge-A X |
+| +0x04 | f32 | edge-A Z |
+| +0x08 | f32 | edge-B Z |
+| +0x0c | f32 | edge-B X |
+| +0x10 | i32 | flag/index (0/36, occasionally a float) — unconfirmed |
+| +0x14 | f32 | a third Z (≈ edge-A Z − 5) — unconfirmed |
+
+Consecutive ribs form the road ribbon (quad strip). N01 = 394 ribs tracing a closed loop over the
+bunker/bridge area. `scene.c load_roads` + `worldview.c build_road_verts` render it (draped on terrain).
+
+### Terrain height encoding — CONFIRMED 2026-06-21 (byte0 = height, NOT wrapped)
+
+The `.TER` cell byte0 IS the world height (0..255), confirmed: the bunker (a ground building) at its
+XZ samples byte0=44, and 44 × 0.68 = its world Y 30 (clean fit). A 2D phase-unwrap test (treating the
+big `246→2` adjacent jumps as mod-256 wraps) makes it WORSE (negative/300 heights) → the steep jumps
+are **real mesa/butte cliffs**, not an encoding artifact. The `(byte1>>4)` is the material (jumps
+between rows), not a height high-byte. CONSEQUENCE: rendering the raw `.TER` heightfield shows those
+real cliffs; the bridge sits on a byte-144 spot and roads cross mesa edges → "buried bridge"/"vertical
+road". Those are the **raw-collision vs smooth-visible-terrain gap**: the bridge/road are authored for
+the game's *tessellated* visible surface (the parked tessellator in nitro.exe), which we render only as
+the raw heightfield. Mapping + scale are correct (bunker seats); exact bridge/road draping needs the
+tessellator capture.
 
 ---
 

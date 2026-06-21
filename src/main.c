@@ -39,6 +39,7 @@
 #include "engine/meshcache.h"
 #include "engine/meshview.h"
 #include "engine/sceneview.h"
+#include "engine/worldview.h"
 #include "render/render.h"
 
 /* -----------------------------------------------------------------------
@@ -46,8 +47,10 @@
  * ----------------------------------------------------------------------- */
 
 #define WINDOW_TITLE   "Vigalante '76"
-#define WINDOW_WIDTH   640
-#define WINDOW_HEIGHT  480
+/* Larger than the original 640x480 to make the in-engine viewers easier to
+ * diagnose; 4:3 preserved so 2D screens (640x480 indexed) upscale cleanly. */
+#define WINDOW_WIDTH   1280
+#define WINDOW_HEIGHT  960
 
 /* Asset paths — original used backslashes; we use forward slashes.
  * Place the game's addon/ directory alongside the binary. */
@@ -78,12 +81,22 @@ int main(int argc, char *argv[])
     /* --meshview: dev tool — browse decoded OEG meshes instead of running the
      * game. Handled here (not in cmdline.c) since it's a developer entry point. */
     bool mesh_view = false;
-    const char *scene_view = NULL;   /* mission path, or NULL */
+    const char *scene_view = NULL;   /* wireframe mission path, or NULL */
+    const char *world_view = NULL;   /* solid 3D mission path, or NULL  */
+    RenderMode  world_mode = RENDER_SOFTWARE;  /* faithful path is the default */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--meshview") == 0) mesh_view = true;
         else if (strcmp(argv[i], "--sceneview") == 0)
             scene_view = (i + 1 < argc && argv[i+1][0] != '-') ? argv[++i]
                                                                : "miss8/N01.CBT";
+        else if (strcmp(argv[i], "--worldview") == 0)
+            world_view = (i + 1 < argc && argv[i+1][0] != '-') ? argv[++i]
+                                                               : "miss8/N01.CBT";
+        else if (strcmp(argv[i], "--render") == 0 && i + 1 < argc) {
+            const char *m = argv[++i];
+            world_mode = (strcmp(m, "hw") == 0 || strcmp(m, "hardware") == 0)
+                       ? RENDER_HARDWARE : RENDER_SOFTWARE;
+        }
     }
 
     /* -------------------------------------------------------------- */
@@ -178,7 +191,7 @@ int main(int argc, char *argv[])
     /* Any keypress skips. Not found = silently continue.              */
     /* -------------------------------------------------------------- */
 
-    if (!mesh_view && !scene_view) {
+    if (!mesh_view && !scene_view && !world_view) {
         video_play("smk/introf01.smk");
         video_play("smk/credf01.smk");
     }
@@ -212,7 +225,12 @@ int main(int argc, char *argv[])
     /* active state's runner and loops until something sets GS_QUIT.    */
     /* -------------------------------------------------------------- */
 
-    if (scene_view) {
+    if (world_view) {
+        /* Developer entry point: solid 3D scene with a free-fly camera. */
+        fprintf(stdout, "[main] --worldview: %s (%s)\n", world_view,
+                world_mode == RENDER_SOFTWARE ? "software" : "hardware");
+        worldview_run(world_view, world_mode);
+    } else if (scene_view) {
         /* Developer entry point: render a mission's placed objects, then exit. */
         fprintf(stdout, "[main] --sceneview: %s\n", scene_view);
         sceneview_run(scene_view);

@@ -39,16 +39,16 @@ set(SHADER_SRC_DIR  ${CMAKE_SOURCE_DIR}/src/render/shaders)
 set(SHADER_GEN_DIR  ${CMAKE_BINARY_DIR}/shaders_gen)
 file(MAKE_DIRECTORY ${SHADER_GEN_DIR})
 
-function(embed_shader TARGET STAGE_EXT VAR_NAME)
-    set(glsl_src  ${SHADER_SRC_DIR}/blit.${STAGE_EXT})
-    set(spv_out   ${SHADER_GEN_DIR}/blit_${STAGE_EXT}.spv)
-    set(hdr_out   ${SHADER_GEN_DIR}/blit_${STAGE_EXT}_spv.h)
+function(embed_shader TARGET NAME STAGE_EXT VAR_NAME)
+    set(glsl_src  ${SHADER_SRC_DIR}/${NAME}.${STAGE_EXT})
+    set(spv_out   ${SHADER_GEN_DIR}/${NAME}_${STAGE_EXT}.spv)
+    set(hdr_out   ${SHADER_GEN_DIR}/${NAME}_${STAGE_EXT}_spv.h)
 
     add_custom_command(
         OUTPUT  ${spv_out}
         COMMAND ${GLSLC} -o ${spv_out} ${glsl_src}
         DEPENDS ${glsl_src}
-        COMMENT "glslc: blit.${STAGE_EXT}"
+        COMMENT "glslc: ${NAME}.${STAGE_EXT}"
     )
     add_custom_command(
         OUTPUT  ${hdr_out}
@@ -58,7 +58,7 @@ function(embed_shader TARGET STAGE_EXT VAR_NAME)
                     -DVAR=${VAR_NAME}
                     -P ${CMAKE_SOURCE_DIR}/cmake/embed_spv.cmake
         DEPENDS ${spv_out}
-        COMMENT "embed: blit_${STAGE_EXT}_spv.h"
+        COMMENT "embed: ${NAME}_${STAGE_EXT}_spv.h"
     )
     target_sources(${TARGET} PRIVATE ${hdr_out})
 endfunction()
@@ -79,8 +79,10 @@ set_source_files_properties(${LIBSMACKER_SOURCES} PROPERTIES COMPILE_FLAGS "-Wno
 
 add_executable(i76 ${SOURCES} ${LIBSMACKER_SOURCES})
 
-embed_shader(i76 vert blit_vert_spv)
-embed_shader(i76 frag blit_frag_spv)
+embed_shader(i76 blit vert blit_vert_spv)
+embed_shader(i76 blit frag blit_frag_spv)
+embed_shader(i76 mesh vert mesh_vert_spv)
+embed_shader(i76 mesh frag mesh_frag_spv)
 
 target_include_directories(i76 PRIVATE
     src/

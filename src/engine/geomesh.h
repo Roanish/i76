@@ -27,6 +27,7 @@
  */
 
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct {
     char   name[17];        /* embedded 16-byte name, null-terminated        */
@@ -37,6 +38,11 @@ typedef struct {
     int   *face_first;      /* [num_faces]    offset of face f into indices[]  */
     int   *face_count;      /* [num_faces]    vertex count of face f           */
     int   *indices;         /* [num_indices]  vertex indices into verts        */
+    /* Texturing (on-disk face record: name@+0x22, per-vertex UV@entry+0x08/+0x0c,
+     * colour bytes@+0x08 — see docs/REVERSING.md "OEG face texture/UV layout"). */
+    float   *uv;            /* [num_indices*2]  per face-vertex U,V (parallel to indices) */
+    char    *face_tex;      /* [num_faces*16]   per-face texture name (NUL-terminated)    */
+    uint8_t *face_color;    /* [num_faces*3]    per-face colour bytes (untextured faces)  */
     float  bb_min[3];
     float  bb_max[3];
 } GeoMesh;

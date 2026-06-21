@@ -63,7 +63,10 @@ typedef enum {
     PK_SPACE,
     PK_UP, PK_DOWN, PK_LEFT, PK_RIGHT,
     PK_W, PK_A, PK_S, PK_D,
+    PK_Q, PK_E,
     PK_P,
+    PK_TAB,
+    PK_LSHIFT,
     PK_COUNT
 } PlatformKey;
 

@@ -80,7 +80,11 @@ GeoMesh *geomesh_decode(const void *image, size_t size)
     m->face_first = malloc(sizeof(int) * (nF ? nF : 1));
     m->face_count = malloc(sizeof(int) * (nF ? nF : 1));
     m->indices    = malloc(sizeof(int) * (total_idx ? (size_t)total_idx : 1));
-    if (!m->verts || !m->face_first || !m->face_count || !m->indices) {
+    m->uv         = malloc(sizeof(float) * 2 * (total_idx ? (size_t)total_idx : 1));
+    m->face_tex   = calloc((size_t)(nF ? nF : 1), 16);
+    m->face_color = calloc((size_t)(nF ? nF : 1), 3);
+    if (!m->verts || !m->face_first || !m->face_count || !m->indices ||
+        !m->uv || !m->face_tex || !m->face_color) {
         geomesh_free(m);
         return NULL;
     }
@@ -100,8 +104,16 @@ GeoMesh *geomesh_decode(const void *image, size_t size)
         int nfv = (int)rd_u32(b + p + 4);
         m->face_first[f] = oi;
         m->face_count[f] = nfv;
-        for (int k = 0; k < nfv; k++)
-            m->indices[oi++] = (int)rd_u32(b + p + FACE_HDR + (size_t)k * FACE_VTX);
+        memcpy(m->face_tex + (size_t)f * 16, b + p + 0x22, 16);
+        m->face_tex[(size_t)f * 16 + 15] = '\0';
+        memcpy(m->face_color + (size_t)f * 3, b + p + 0x08, 3);
+        for (int k = 0; k < nfv; k++) {
+            const uint8_t *e = b + p + FACE_HDR + (size_t)k * FACE_VTX;
+            m->indices[oi]  = (int)rd_u32(e);
+            m->uv[oi * 2]     = rd_f32(e + 0x08);
+            m->uv[oi * 2 + 1] = rd_f32(e + 0x0c);
+            oi++;
+        }
         p += (size_t)FACE_HDR + (size_t)nfv * FACE_VTX;
     }
 
@@ -125,5 +137,8 @@ void geomesh_free(GeoMesh *m)
     free(m->face_first);
     free(m->face_count);
     free(m->indices);
+    free(m->uv);
+    free(m->face_tex);
+    free(m->face_color);
     free(m);
 }

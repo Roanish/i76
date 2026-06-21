@@ -26,5 +26,11 @@ layout(set = 0, binding = 1, std140) uniform Palette {
 void main() {
     float raw = texture(u_indexed, v_uv).r;
     int   idx = int(round(raw * 255.0));
-    out_color = u_palette.entries[idx];
+    /*
+     * Index 0 is the transparent key. The blit runs as an OVERLAY on top of the
+     * 3D world pass (alpha blending enabled), so index-0 pixels let the 3D scene
+     * show through. For pure-2D screens the framebuffer behind is the black
+     * clear, and I'76 palettes use index 0 = black, so this stays correct there.
+     */
+    out_color = vec4(u_palette.entries[idx].rgb, idx == 0 ? 0.0 : 1.0);
 }
