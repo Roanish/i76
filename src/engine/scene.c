@@ -211,7 +211,9 @@ static int expand_sdf(ItemVec *iv, const char *name,
 
         Part *p = &parts[np++];
         p->m = best;
-        for (int k = 0; k < 9; k++) p->pR[k] = rd_f32(base + 0x08 + 4*k);
+        for (int r = 0; r < 3; r++)                    /* +0x08 is column-major */
+            for (int c = 0; c < 3; c++)
+                p->pR[r*3+c] = rd_f32(base + 0x08 + 4*(c*3+r));
         for (int k = 0; k < 3; k++) p->pt[k] = rd_f32(base + 0x2c + 4*k);
         snprintf(p->name, sizeof p->name, "%s", pname);
         read_name8(base + 0x38, p->parent);
@@ -324,8 +326,11 @@ static void load_world_textures(Scene *s, const uint8_t *d, long sz)
 }
 
 /* Parse RDEF -> RSEG: the road network. RSEG payload = [u32 ?][u32 count] then
- * `count` 24-byte ribs (left edge X@+0/Z@+4, right edge Z@+8/X@+0x0c, +0x10 flag,
- * +0x14 z). RSEG loader FUN_004b4370 copies these verbatim. See REVERSING.md. */
+ * `count` 24-byte ribs. Each rib is TWO edge points, X/Y/Z each: edgeA at
+ * +0x00/+04/+08, edgeB at +0x0c/+10/+14 (confirmed from roads_drape FUN_00493cc0,
+ * which reads edgeA.X@+0,Z@+8 / edgeB.X@+0xc,Z@+0x14 and fills Y@+4/+0x10 by
+ * terrain draping). The +0x04/+0x10 Y slots are scratch on disk. RSEG loader
+ * FUN_004b4370 copies the ribs verbatim. See REVERSING.md "RDEF / road segments". */
 static void load_roads(Scene *s, const uint8_t *d, long sz)
 {
     long rdef = find_chunk(d, 0, sz, "RDEF");
@@ -344,10 +349,10 @@ static void load_roads(Scene *s, const uint8_t *d, long sz)
     s->road_count = (int)count;
     for (uint32_t i = 0; i < count; i++) {
         const uint8_t *r = d + recs + (size_t)i * 24;
-        s->road[i].lx = rd_f32(r + 0x00);
-        s->road[i].lz = rd_f32(r + 0x04);
-        s->road[i].rz = rd_f32(r + 0x08);
-        s->road[i].rx = rd_f32(r + 0x0c);
+        s->road[i].lx = rd_f32(r + 0x00);   /* edgeA.X */
+        s->road[i].lz = rd_f32(r + 0x08);   /* edgeA.Z */
+        s->road[i].rx = rd_f32(r + 0x0c);   /* edgeB.X */
+        s->road[i].rz = rd_f32(r + 0x14);   /* edgeB.Z */
     }
     fprintf(stderr, "[scene] roads: %d ribs\n", s->road_count);
 }
@@ -388,7 +393,13 @@ Scene *scene_load_mission(const char *path)
             }
             name[nl] = '\0';
             float R[9], t[3];
-            for (int i = 0; i < 9; i++) R[i] = rd_f32(p + 0x08 + 4*i);
+            /* The +0x08 3x3 is stored COLUMN-MAJOR; we keep R row-major, so read
+             * transposed. Confirmed via N01's bridge (bewdbrg2 = Ry(+90); read
+             * naively it rendered 180 out of phase; identity-oriented objects like
+             * the bunker are unaffected either way). */
+            for (int r = 0; r < 3; r++)
+                for (int c = 0; c < 3; c++)
+                    R[r*3+c] = rd_f32(p + 0x08 + 4*(c*3+r));
             for (int i = 0; i < 3; i++) t[i] = rd_f32(p + 0x2c + 4*i);
             int type = (int)rd_u32(p + 0x5c);
             n_obj++;

@@ -49,8 +49,8 @@ typedef struct {
  * The road has no stored Y — it drapes onto the terrain. Consecutive ribs form
  * the road ribbon (quad strip). See docs/REVERSING.md "RDEF / road segments". */
 typedef struct {
-    float lx, lz;   /* left edge  (rib +0x00 X, +0x04 Z) */
-    float rx, rz;   /* right edge (rib +0x0c X, +0x08 Z) */
+    float lx, lz;   /* edgeA (rib +0x00 X, +0x08 Z) */
+    float rx, rz;   /* edgeB (rib +0x0c X, +0x14 Z) */
 } RoadRib;
 
 typedef struct {
