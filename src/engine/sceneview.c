@@ -154,9 +154,10 @@ static void draw_grid(uint8_t *fb, const Cam *c, const float center[3], float ra
 /* Terrain patch — downsampled height-mesh wireframe                         */
 /* ----------------------------------------------------------------------- */
 
-static uint8_t terrain_band(uint8_t h)
+/* h is the 12-bit cell height (0..4095); band low/mid/high for the wireframe. */
+static uint8_t terrain_band(int h)
 {
-    return (uint8_t)(IDX_TER0 + (h < 60 ? 0 : h < 140 ? 1 : 2));
+    return (uint8_t)(IDX_TER0 + (h < 150 ? 0 : h < 400 ? 1 : 2));
 }
 
 /* Orientation hypotheses for how the stored 128x128 heightfield maps to world
@@ -189,9 +190,9 @@ static void draw_terrain(uint8_t *fb, const Cam *c, const TerrainPatch *p,
     for (int gz = 0; gz < n; gz += step) {
         int cols = 0;
         for (int gx = 0; gx < n; gx += step, cols++) {
-            uint8_t h = p->heights[height_index(p, gx, gz, orient)];
+            int h = p->heights[height_index(p, gx, gz, orient)];
             float w[3] = { p->origin[0] + gx * p->cell,
-                           h * hscale,
+                           h * (0.1f * hscale),   /* 12-bit height * 0.1 (FUN_004953e0) */
                            p->origin[1] + gz * p->cell };
             float sx, sy;
             uint8_t vis = (uint8_t)project(c, w, &sx, &sy);
@@ -277,9 +278,10 @@ void sceneview_run(const char *mission_path)
     if (dist < 50.0f) dist = 50.0f;
     bool spin = true;
 
-    /* terrain tuning knobs (uncalibrated — adjust live to find the right look) */
-    static const float HS[] = { 0.25f, 0.5f, 0.68f, 1.0f, 2.0f };
-    int   hs_idx = 1;            /* -> 0.5 */
+    /* Vertical scale is known (height12 * 0.1, FUN_004953e0); HS is a debug
+     * multiplier on top — 1.0 is exact, SPACE cycles it. */
+    static const float HS[] = { 1.0f, 0.85f, 1.25f, 1.5f, 0.5f };
+    int   hs_idx = 0;            /* -> 1.0 (exact) */
     int   orient = 0;           /* within-patch heightfield orientation */
 
     fprintf(stdout, "[sceneview] %d items. LEFT/RIGHT orbit, UP/DOWN zoom, "

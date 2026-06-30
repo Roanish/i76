@@ -291,10 +291,12 @@ static void load_terrain(Scene *s, const uint8_t *d, long sz, const char *missio
         p->dim  = ZONE_DIM;
         p->cell = FINE_CELL;
         p->zone = zi;
-        p->heights = malloc(ZONE_DIM * ZONE_DIM);
+        p->heights = malloc(ZONE_DIM * ZONE_DIM * sizeof(uint16_t));
         const uint8_t *slab = ter + (size_t)zi * ZONE_BYTES;
-        for (int i = 0; i < ZONE_DIM * ZONE_DIM; i++)
-            p->heights[i] = slab[i * 2];                 /* byte0 = height */
+        for (int i = 0; i < ZONE_DIM * ZONE_DIM; i++) {
+            /* visible height = low 12 bits of the u16 cell; byte1>>4 = material */
+            p->heights[i] = (uint16_t)(((slab[i*2+1] & 0x0F) << 8) | slab[i*2]);
+        }
     }
     free(ter);
     fprintf(stderr, "[scene] terrain '%s': %d zones, %d patch(es) placed\n",

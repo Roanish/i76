@@ -32,14 +32,17 @@ typedef struct {
  * each non-empty cell gets one zone slab from the .TER file. Scale is derived
  * empirically (see scene.c): coarse cell = 640 world units, so fine cell = 5.
  * Cell (fz,fx) -> world x = origin[0]+fx*cell, z = origin[1]+fz*cell,
- *                 y = heights[fz*dim+fx] * (height scale, applied at render).
+ *                 y = heights[fz*dim+fx] * 0.1 (see terrain_height_sample,
+ *                 nitro.exe FUN_004953e0: bilinear, vertical scale 0.1).
+ * Each .TER cell is a u16; the visible height is the low 12 bits =
+ * ((byte1 & 0x0F) << 8) | byte0, range 0..4095. byte1>>4 is the material.
  */
 typedef struct {
-    float    origin[2];    /* world (x,z) of the patch's min corner        */
-    int      dim;          /* cells per side (128)                          */
-    float    cell;         /* world units per fine cell (5.0)               */
-    uint8_t *heights;      /* dim*dim height bytes (byte0 of each .TER cell) */
-    int      zone;
+    float     origin[2];   /* world (x,z) of the patch's min corner         */
+    int       dim;         /* cells per side (128)                          */
+    float     cell;        /* world units per fine cell (5.0)               */
+    uint16_t *heights;     /* dim*dim 12-bit heights ((b1&0xF)<<8 | b0)      */
+    int       zone;
 } TerrainPatch;
 
 /* One road cross-section "rib" (RDEF/RSEG): two edge points in the XZ plane.

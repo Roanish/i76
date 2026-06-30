@@ -98,6 +98,9 @@ static void item_model(float m[16], const float R[9], const float t[3])
  * by the hardware path. The software path reads the patch heightfield directly. */
 #define MV 5   /* floats per GPU mesh vertex (pos3 + uv2); matches render_vk.c */
 #define TERRAIN_TILE 96.0f   /* world units per terrain-texture repeat */
+/* Vertical scale: world Y = height12 * 0.1 (nitro.exe terrain_height_sample,
+ * FUN_004953e0). `hscale` is now a debug multiplier on this (1.0 = exact). */
+#define TERRAIN_Y_SCALE 0.1f
 
 static float *build_terrain_verts(const TerrainPatch *p, float hscale,
                                   uint32_t *out_count)
@@ -116,9 +119,9 @@ static float *build_terrain_verts(const TerrainPatch *p, float hscale,
             int cx[4] = { gx, gx+step, gx+step, gx }, cz[4] = { gz, gz, gz+step, gz+step };
             float c[4][3];
             for (int i = 0; i < 4; i++) {
-                uint8_t h = p->heights[cz[i] * n + cx[i]];
+                int h = p->heights[cz[i] * n + cx[i]];
                 c[i][0] = p->origin[0] + cx[i] * p->cell;
-                c[i][1] = h * hscale;
+                c[i][1] = h * (TERRAIN_Y_SCALE * hscale);
                 c[i][2] = p->origin[1] + cz[i] * p->cell;
             }
             int quad[6] = { 0,1,2, 0,2,3 };
@@ -133,8 +136,9 @@ static float *build_terrain_verts(const TerrainPatch *p, float hscale,
     return v;
 }
 
-/* Terrain world-Y under (x,z): find the covering patch, look up + scale the
- * height byte. 0 if outside all patches. */
+/* Terrain world-Y under (x,z): find the covering patch and bilinearly
+ * interpolate the 4 surrounding 12-bit heights, scaled by 0.1 — faithful to
+ * nitro.exe terrain_height_sample (FUN_004953e0). 0 if outside all patches. */
 static float sample_terrain_y(const Scene *s, float x, float z, float hscale)
 {
     for (int i = 0; i < s->patch_count; i++) {
@@ -142,11 +146,17 @@ static float sample_terrain_y(const Scene *s, float x, float z, float hscale)
         float ext = p->dim * p->cell;
         if (x < p->origin[0] || x >= p->origin[0] + ext ||
             z < p->origin[1] || z >= p->origin[1] + ext) continue;
-        int fx = (int)((x - p->origin[0]) / p->cell);
-        int fz = (int)((z - p->origin[1]) / p->cell);
-        if (fx < 0) fx = 0; else if (fx >= p->dim) fx = p->dim - 1;
-        if (fz < 0) fz = 0; else if (fz >= p->dim) fz = p->dim - 1;
-        return p->heights[fz * p->dim + fx] * hscale;
+        float cxf = (x - p->origin[0]) / p->cell;
+        float czf = (z - p->origin[1]) / p->cell;
+        int fx = (int)cxf, fz = (int)czf;
+        float tx = cxf - fx, tz = czf - fz;          /* fractional cell offset */
+        int fx1 = fx + 1 < p->dim ? fx + 1 : fx;
+        int fz1 = fz + 1 < p->dim ? fz + 1 : fz;
+        float h00 = p->heights[fz  * p->dim + fx ], h10 = p->heights[fz  * p->dim + fx1];
+        float h01 = p->heights[fz1 * p->dim + fx ], h11 = p->heights[fz1 * p->dim + fx1];
+        float hx0 = h00 + (h10 - h00) * tx;
+        float hx1 = h01 + (h11 - h01) * tx;
+        return (hx0 + (hx1 - hx0) * tz) * (TERRAIN_Y_SCALE * hscale);
     }
     return 0.0f;
 }
@@ -440,11 +450,11 @@ void worldview_run(const char *mission_path, RenderMode mode)
     }
 
     /* Terrain — both representations, rebuilt when the height scale changes. */
-    /* HEIGHT_SCALE candidates; default 0.68 = the bunker/regen calibration (terrain
-     * byte 44 * 0.68 = world Y 30, seats the bunker exactly). The exact constant
-     * lives in the terrain tessellator (see [[project-i76-status]] dynamic-debug). */
-    static const float HS[] = { 0.25f, 0.5f, 0.68f, 1.0f, 2.0f };
-    int hs_idx = 2;
+    /* The real vertical scale is now known (TERRAIN_Y_SCALE = 0.1 on the 12-bit
+     * height; nitro.exe terrain_height_sample / FUN_004953e0). HS is a debug
+     * multiplier on top — 1.0 is exact; P cycles it to eyeball the result. */
+    static const float HS[] = { 1.0f, 0.85f, 1.25f, 1.5f, 0.5f };
+    int hs_idx = 0;
     float      **ter_cpu = calloc((size_t)scene->patch_count + 1, sizeof(*ter_cpu));
     uint32_t    *ter_vc  = calloc((size_t)scene->patch_count + 1, sizeof(*ter_vc));
     RenderMesh **ter_gpu = calloc((size_t)scene->patch_count + 1, sizeof(*ter_gpu));
