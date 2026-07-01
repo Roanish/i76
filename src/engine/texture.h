@@ -14,12 +14,21 @@
  *     (one per animation frame/state); we take entry 0 for a static view.
  *   - the actual pixels are always a `.map`: [u32 w][u32 h] + w*h palette indices.
  * Indices are into the mission `.act` palette (load with palette_load_act).
+ * A `.m16` instead carries its own embedded 16-bit palette; it is decoded and
+ * quantized down to game-palette indices (see texture_set_palette).
  */
 
 typedef struct {
     int      w, h;
     uint8_t *pixels;   /* w*h palette indices, or NULL if the texture failed */
 } Texture;
+
+/*
+ * Set the game palette (256 x RGB, 768 bytes) used to quantize `.m16` textures
+ * (which carry their own embedded 16-bit palette) down to game-palette indices.
+ * Call once per scene, before resolving object textures. Pass NULL to clear.
+ */
+void texture_set_palette(const uint8_t *pal768);
 
 /*
  * Resolve + decode a face texture by name (the raw 16-byte name from the mesh,

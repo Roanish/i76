@@ -471,6 +471,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
      * blit overlay keys out index 0 by value, so it needs no separate palette. */
     Rgb8 pal_sw[256];
     load_act_palette(scene->palette_name, pal_sw);   /* WDEF terrain palette (t15.act) */
+    texture_set_palette((const uint8_t *)pal_sw);    /* for quantizing .m16 textures */
     s_sky_idx     = nearest_index(pal_sw, 42, 52, 74);   /* dusk sky    */
     s_terrain_idx = nearest_index(pal_sw, 96, 84, 60);   /* brown ground */
     build_checker(pal_sw);
