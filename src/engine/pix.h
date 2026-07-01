@@ -14,11 +14,14 @@
  *     <count>\r\n
  *     NAME.ext <byte_offset_into_pak> <byte_length>\r\n   x count
  *
- * pix_init globs all *.pix, strips each record name to its 8-char base, and
- * builds one global array sorted by name. vfs_lod(name) bsearches that array;
- * on a hit it loads the owning .pak (decompressed) and returns the record's
- * bytes; on a miss it falls back to a loose VFS file. This is how a bare mesh
- * name like "AN1ABLD1" resolves to its bytes inside anbunk1g.pak.
+ * pix_init globs all *.pix and builds one global array keyed by uppercased
+ * "BASE.EXT" (8-char base + extension), sorted for bsearch. vfs_lod(name)
+ * looks up that key; a bare name (no extension) defaults to ".GEO" so mesh
+ * names resolve as geometry, while textures pass an explicit extension
+ * (X.vqm / X.map / X.tmt) and no longer collide on a shared base. On a hit it
+ * loads the owning .pak (decompressed) and returns the record bytes; on a miss
+ * it falls back to a loose VFS file. So "AN1ABLD1" -> AN1ABLD1.geo in
+ * anbunk1g.pak, while "an_1bdt1.vqm" -> that record in anbunk1m.pak.
  *
  * Verified against real data: the .pix offsets are byte offsets into the
  * DECOMPRESSED pak and land exactly on the OEG records.

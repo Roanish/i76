@@ -1,10 +1,14 @@
 /*
  * texture.c — mesh face texture loader (see texture.h).
  *
- * Resolution: a face name (lowercased) → if it (or "<name>.tmt") names a Texture
- * Map Table, read entry 0's `.map` base name; otherwise "<name>.map". Then decode
- * the `.map` (8-bit indexed [w][h]+pixels). Results are cached by name in a small
- * linked list — a scene has at most a few dozen distinct textures.
+ * Resolution (deterministic, extension-driven — mirrors the original
+ * texture_load): a face name (lowercased, extension dropped) is resolved via
+ * vfs_lod, trying ".tmt" (a name table -> real base), ".vqm" (vector-quantized),
+ * then ".map" (8-bit indexed) in priority order. ".m16" (16-bit truecolour) is
+ * recognised but skipped (the pipeline is 8-bit). vfs_lod is extension-aware and
+ * resolves both pak records and loose files, so object textures packed in a
+ * material pak (e.g. AN_1BDT1.vqm in anbunk1m.pak) resolve the same as loose
+ * files. Results are cached by name in a small linked list.
  */
 
 #include "texture.h"
@@ -14,10 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "engine/vfs.h"   /* vfs_read_file / vfs_exists / vfs_free — extension-aware,
-                           * tried FIRST so .tmt/.map don't collide on the 8-char base. */
-#include "engine/pix.h"   /* vfs_lod — 8-char-base PIX/PAK resolver; LAST-resort fallback
-                           * for pak'd textures (e.g. the WDEF ground tex tt161sd_). */
+#include "engine/pix.h"   /* vfs_lod — extension-aware PIX/PAK + loose-file resolver */
 
 /* .tmt header: count of index dims @+0x14, dim sizes @+0x18, name array @+0x40
  * (8-byte base names). We only need entry 0 for a static (non-animated) view. */
@@ -96,26 +97,22 @@ static bool decode_vqm(const uint8_t *vqm, size_t vsz,
     return true;
 }
 
-/* Load "<name>.vqm" + its codebook (name @ vqm+8) and decode into t. */
-static void load_vqm(const char *vqmname, Texture *t)
+/* Decode an in-memory .vqm buffer: read its codebook name (@ +8), load the
+ * codebook (a direct VFS file, e.g. ambient.cbk) and vector-dequantize into t. */
+static void decode_vqm_buf(const void *vqm, size_t vsz, Texture *t)
 {
-    size_t vsz = 0;
-    void *vqm = vfs_read_file(vqmname, &vsz);
-    if (!vqm) return;
-    if (vsz >= 0x18) {
-        char cbk[24];
-        memcpy(cbk, (const char *)vqm + 8, 16);
-        cbk[16] = '\0';
-        str_lower(cbk);
-        if (!strchr(cbk, '.')) strncat(cbk, ".cbk", sizeof cbk - strlen(cbk) - 1);
-        size_t csz = 0;
-        void *book = vfs_read_file(cbk, &csz);
-        if (book) {
-            decode_vqm(vqm, vsz, book, csz, t);
-            vfs_free(book);
-        }
+    if (vsz < 0x18) return;
+    char cbk[24];
+    memcpy(cbk, (const char *)vqm + 8, 16);
+    cbk[16] = '\0';
+    str_lower(cbk);
+    if (!strchr(cbk, '.')) strncat(cbk, ".cbk", sizeof cbk - strlen(cbk) - 1);
+    size_t csz = 0;
+    void *book = vfs_lod(cbk, &csz);   /* codebook may be pak'd or a direct file */
+    if (book) {
+        decode_vqm(vqm, vsz, book, csz, t);
+        free(book);
     }
-    vfs_free(vqm);
 }
 
 /* Read entry 0's "<base>.map" name from a `.tmt` blob into out (>=20 bytes). */
@@ -132,22 +129,49 @@ static void tmt_entry0(const void *buf, size_t sz, char *out)
     }
 }
 
-/* Resolve a base name (no extension) to a concrete ".map" file name. */
-static void resolve_map_name(const char *base, char *out)
+/* Resolve a base name to decoded pixels, deterministically by extension,
+ * through the (extension-aware) VFS+pak index — which covers pak records and
+ * loose files alike. Faithful priority: a ".tmt" name-table (entry 0 names the
+ * real base) -> ".vqm" (vector-quantized) -> ".map" (8-bit indexed). A ".m16"
+ * (16-bit truecolour) record is recognised but not renderable in the 8-bit
+ * pipeline, so it's reported and skipped rather than mis-decoded. */
+static void resolve_texture(const char *base, Texture *t, int depth)
 {
-    char tmt[20];
-    snprintf(tmt, sizeof tmt, "%s.tmt", base);
-    if (vfs_exists(tmt)) {
-        size_t sz = 0;
-        void *b = vfs_read_file(tmt, &sz);
-        if (b) {
-            char m[20];
-            tmt_entry0(b, sz, m);
-            vfs_free(b);
-            if (m[0]) { str_lower(m); strncpy(out, m, 20); out[19] = '\0'; return; }
+    char name[24];
+    size_t sz;
+    void *buf;
+    if (depth > 3) return;
+
+    snprintf(name, sizeof name, "%s.tmt", base);
+    if ((buf = vfs_lod(name, &sz))) {
+        char m[20];
+        tmt_entry0(buf, sz, m);
+        free(buf);
+        if (m[0]) {
+            str_lower(m);
+            char *d = strchr(m, '.');
+            if (d) *d = '\0';
+            resolve_texture(m, t, depth + 1);
+            if (t->pixels) return;
         }
     }
-    snprintf(out, 20, "%s.map", base);
+    snprintf(name, sizeof name, "%s.vqm", base);
+    if ((buf = vfs_lod(name, &sz))) {
+        decode_vqm_buf(buf, sz, t);
+        free(buf);
+        if (t->pixels) return;
+    }
+    snprintf(name, sizeof name, "%s.map", base);
+    if ((buf = vfs_lod(name, &sz))) {
+        decode_map(buf, sz, t);
+        free(buf);
+        if (t->pixels) return;
+    }
+    snprintf(name, sizeof name, "%s.m16", base);
+    if ((buf = vfs_lod(name, &sz))) {
+        free(buf);
+        fprintf(stderr, "[tex] %s.m16: 16-bit texture unsupported (skipped)\n", base);
+    }
 }
 
 const Texture *texture_get(const char *rawname)
@@ -175,35 +199,7 @@ const Texture *texture_get(const char *rawname)
     TexNode *node = calloc(1, sizeof *node);
     strncpy(node->name, name, sizeof node->name - 1);
 
-    /* Faithful order (mirrors texture_load): "<base>.vqm" (+codebook) first,
-     * then the uncompressed "<base>.map" (resolving "<base>.tmt" if present). */
-    char vqmname[24];
-    snprintf(vqmname, sizeof vqmname, "%s.vqm", base);
-    if (vfs_exists(vqmname))
-        load_vqm(vqmname, &node->tex);
-
-    if (!node->tex.pixels) {
-        char mapname[20];
-        resolve_map_name(base, mapname);
-        size_t sz = 0;
-        void *buf = vfs_read_file(mapname, &sz);
-        if (buf) {
-            decode_map(buf, sz, &node->tex);
-            vfs_free(buf);
-        }
-    }
-
-    /* Pak fallback: textures named by an 8-char base (e.g. the WDEF ground
-     * texture tt161sd_, packed in tt16m.pak) aren't direct VFS files — resolve
-     * them through the PIX/PAK index. The .map pixel layout is the same. */
-    if (!node->tex.pixels) {
-        size_t sz = 0;
-        void *buf = vfs_lod(base, &sz);   /* malloc'd; free with free() */
-        if (buf) {
-            decode_map(buf, sz, &node->tex);
-            free(buf);
-        }
-    }
+    resolve_texture(base, &node->tex, 0);
 
     if (!node->tex.pixels)
         fprintf(stderr, "[tex] MISSING %s\n", name);

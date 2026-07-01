@@ -21,7 +21,7 @@
 /* ----------------------------------------------------------------------- */
 
 typedef struct {
-    char     key[9];      /* 8-char uppercased base name, null-terminated   */
+    char     key[16];     /* uppercased "BASE.EXT" (8-char base + ext)       */
     int      pak;         /* index into s_paks                              */
     uint32_t off;         /* byte offset into the decompressed pak          */
     uint32_t len;         /* record byte length                             */
@@ -45,14 +45,26 @@ static struct { int pak; void *data; size_t size; } s_cache[PAK_CACHE];
 static int s_cache_next;
 
 /* ----------------------------------------------------------------------- */
-/* Key helper: strip extension, uppercase, max 8 chars.                      */
+/* Key helper: uppercased "BASE.EXT" — 8-char base + extension, so records   */
+/* that share a base but differ in extension (X.geo vs X.vqm vs X.map) are   */
+/* distinct. A bare lookup name (no extension) defaults to ".GEO" — geometry */
+/* records — so geo_cache_acquire's bare mesh names still resolve.           */
 /* ----------------------------------------------------------------------- */
 
-static void make_key(const char *name, char out[9])
+static void make_key(const char *name, char out[16])
 {
     int i = 0;
     for (; i < 8 && name[i] && name[i] != '.'; i++)
         out[i] = (char)toupper((unsigned char)name[i]);
+    out[i++] = '.';
+    const char *ext = strchr(name, '.');
+    if (ext) {
+        ext++;
+        for (int j = 0; j < 4 && ext[j] && ext[j] != '.'; j++)
+            out[i++] = (char)toupper((unsigned char)ext[j]);
+    } else {
+        out[i++] = 'G'; out[i++] = 'E'; out[i++] = 'O';
+    }
     out[i] = '\0';
 }
 
@@ -172,10 +184,8 @@ int pix_count(void) { return s_count; }
 
 static const PixEntry *find(const char *name)
 {
-    char key[9];
-    make_key(name, key);
     PixEntry probe;
-    memcpy(probe.key, key, sizeof(key));
+    make_key(name, probe.key);
     return bsearch(&probe, s_ent, s_count, sizeof(*s_ent), ent_cmp);
 }
 
