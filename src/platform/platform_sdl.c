@@ -114,6 +114,14 @@ bool platform_pump_events(PlatformEvent *evt)
     evt->type = PLATFORM_EVENT_NONE;
     evt->key  = PK_UNKNOWN;
 
+    /* Quit is sticky: once the window was closed, every later pump reports it,
+     * so a consumer that swallows the event (a video skip, a queue flush)
+     * can't lose it — the next loop still sees the quit. */
+    if (!s_running) {
+        evt->type = PLATFORM_EVENT_QUIT;
+        return false;
+    }
+
     SDL_Event sdl_evt;
     if (!SDL_PollEvent(&sdl_evt))
         return true;
@@ -140,8 +148,23 @@ bool platform_pump_events(PlatformEvent *evt)
             evt->key  = translate_key(sdl_evt.key.keysym.sym);
             return true;
 
+        case SDL_MOUSEBUTTONDOWN:
+            evt->type = PLATFORM_EVENT_MOUSE_DOWN;
+            return true;
+
         default:
             return true;
+    }
+}
+
+bool platform_flush_events(void)
+{
+    for (;;) {
+        PlatformEvent evt;
+        if (!platform_pump_events(&evt))
+            return false;                     /* quit is not discarded */
+        if (evt.type == PLATFORM_EVENT_NONE)
+            return true;                      /* queue drained */
     }
 }
 

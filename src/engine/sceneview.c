@@ -287,6 +287,9 @@ void sceneview_run(const char *mission_path)
     fprintf(stdout, "[sceneview] %d items. LEFT/RIGHT orbit, UP/DOWN zoom, "
                     "SPACE height-scale, P terrain-orient, ESC quit.\n", scene->count);
 
+    /* Discard input buffered during the load so it doesn't fire actions. */
+    platform_flush_events();
+
     uint64_t last = platform_get_ticks();
     while (1) {
         uint64_t fstart = platform_get_ticks();

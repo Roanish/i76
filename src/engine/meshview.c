@@ -166,6 +166,9 @@ void meshview_run(void)
     fprintf(stdout, "[meshview] running. LEFT/RIGHT cycle, UP/DOWN zoom, "
                     "SPACE spin, ESC quit.\n");
 
+    /* Discard input buffered during startup so it doesn't fire actions. */
+    platform_flush_events();
+
     uint64_t last = platform_get_ticks();
     bool running = true;
     while (running) {

@@ -96,14 +96,23 @@ bool video_play(const char *path)
             SDL_QueueAudio(audio_dev, audio, (uint32_t)size);
     }
 
+    bool skipped = false;
+
     while (ret == SMK_MORE || ret == SMK_LAST) {
 
         uint64_t frame_start = platform_get_ticks();
 
-        /* Event pump — any key or window-close skips */
-        PlatformEvent evt;
-        if (!platform_pump_events(&evt)) break;
-        if (evt.type == PLATFORM_EVENT_KEY_DOWN) break;
+        /* Event pump — any key or mouse click skips; window-close quits.
+         * Drain the WHOLE queue each frame: one-event-per-frame polling let a
+         * flood of mouse-motion events bury the keypress for seconds. */
+        for (;;) {
+            PlatformEvent evt;
+            if (!platform_pump_events(&evt)) { skipped = true; break; }
+            if (evt.type == PLATFORM_EVENT_NONE) break;
+            if (evt.type == PLATFORM_EVENT_KEY_DOWN ||
+                evt.type == PLATFORM_EVENT_MOUSE_DOWN) skipped = true;
+        }
+        if (skipped) break;
 
         const unsigned char *palette = smk_get_palette(s);
         const unsigned char *pixels  = smk_get_video(s);
@@ -133,12 +142,22 @@ bool video_play(const char *path)
     }
 
     if (audio_dev) {
-        /* Drain queued audio before closing so the end doesn't cut off */
-        while (SDL_GetQueuedAudioSize(audio_dev) > 0)
-            SDL_Delay(10);
+        if (skipped) {
+            /* User skipped: cut the sound instantly. */
+            SDL_ClearQueuedAudio(audio_dev);
+        } else {
+            /* Ran to the end: drain queued audio so the end doesn't cut off */
+            while (SDL_GetQueuedAudioSize(audio_dev) > 0)
+                SDL_Delay(10);
+        }
         SDL_CloseAudioDevice(audio_dev);
     }
 
     smk_close(s);
+
+    /* Leave a clean queue: the skip press (and anything else buffered during
+     * playback) must not leak into the next video or the game/viewer loop. */
+    platform_flush_events();
+
     return true;
 }

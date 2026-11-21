@@ -46,6 +46,7 @@ typedef enum {
     PLATFORM_EVENT_QUIT,        /* WM_QUIT equivalent */
     PLATFORM_EVENT_KEY_DOWN,
     PLATFORM_EVENT_KEY_UP,
+    PLATFORM_EVENT_MOUSE_DOWN,  /* any mouse button press (video skip etc.) */
 } PlatformEventType;
 
 /*
@@ -129,6 +130,15 @@ void platform_shutdown(void);
  *   dispatching; we handle that here transparently.
  */
 bool platform_pump_events(PlatformEvent *evt);
+
+/*
+ * platform_flush_events()
+ *   Drain and discard everything queued (stale keypresses buffered during a
+ *   video or a long load), so the next consumer starts from a clean queue.
+ *   A quit event encountered while flushing is NOT discarded — it is
+ *   reported by returning false, like platform_pump_events().
+ */
+bool platform_flush_events(void);
 
 /* ------------------------------------------------------------------ */
 /* Timing                                                               */
