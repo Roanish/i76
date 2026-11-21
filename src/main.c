@@ -32,6 +32,7 @@
 #include "engine/fs.h"
 #include "engine/vfs.h"
 #include "engine/pix.h"
+#include "engine/mods.h"
 #include "engine/strlookup.h"
 #include "engine/pcx.h"
 #include "engine/video.h"
@@ -119,6 +120,15 @@ int main(int argc, char *argv[])
     /* -------------------------------------------------------------- */
 
     pix_init();
+
+    /* -------------------------------------------------------------- */
+    /* Mods (ours, not the original's): presentation-only overrides.    */
+    /* Renderer/UI reads go through asset_present_*(); the simulation   */
+    /* keeps reading the base archives only. See engine/mods.h.          */
+    /* -------------------------------------------------------------- */
+
+    if (!args.no_mods) mods_init(args.mods_root);
+    else fprintf(stdout, "[mods] disabled (--no-mods)\n");
 
     /* -------------------------------------------------------------- */
     /* Mesh cache                                                       */

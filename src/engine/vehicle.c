@@ -14,6 +14,7 @@
 #include "engine/vehicle.h"
 #include "engine/vfs.h"
 #include "engine/meshcache.h"
+#include "engine/mods.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -187,7 +188,10 @@ static void add_bind(VehicleModel *v, int cap, int slot, const char *ph, const u
 static void vehicle_apply_skin(VehicleModel *v, const char *vtf_name)
 {
     size_t sz = 0;
-    uint8_t *d = vfs_read_file(vtf_name, &sz);
+    /* PRESENTATION: the .vtf only maps placeholder face names to textures,
+     * so a mod may supply new paint jobs. (.vcf/.vdf/.wdf stay base-only —
+     * they define placement, mounts and handling.) */
+    uint8_t *d = asset_present_file(vtf_name, &sz);
     if (!d) { fprintf(stderr, "[veh] skin %s not found\n", vtf_name); return; }
     long c = find_chunk(d, 0, (long)sz, "VTFC");
     if (c < 0 || c + 0x4b7 + VTF_SLOT > (long)sz) {

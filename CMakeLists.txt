@@ -127,6 +127,8 @@ set(BROWSER_ENGINE_SOURCES
     src/engine/zfs.c
     src/engine/vfs.c
     src/engine/pcx.c
+    src/engine/mods.c     # pcx_load reads through the (inactive here) mod layer
+    src/engine/pix.c
 )
 pkg_check_modules(SDL2_TTF REQUIRED SDL2_ttf)
 

@@ -6,6 +6,7 @@
 
 #include "font.h"
 #include "vfs.h"
+#include "mods.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,7 +17,7 @@
 Font *font_load(const char *path)
 {
     size_t   size;
-    uint8_t *data = vfs_read_file(path, &size);
+    uint8_t *data = asset_present_file(path, &size);   /* moddable */
     if (!data) return NULL;
 
     if (size < 16) {

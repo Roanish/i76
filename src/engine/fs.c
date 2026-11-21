@@ -7,6 +7,13 @@
 #include <ctype.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
+
 static char s_root[512] = ".";
 
 void fs_set_root(const char *root)
@@ -63,4 +70,36 @@ FILE *fs_fopen(const char *path, const char *mode)
 
     set_basename_case(buf, 0); /* try lowercase.ext */
     return fopen(buf, mode);
+}
+
+int fs_list_dir(const char *path, void (*fn)(const char *name, int is_dir, void *ud), void *ud)
+{
+#ifdef _WIN32
+    /* UNTESTED: Windows build not yet exercised. */
+    char pat[1024];
+    snprintf(pat, sizeof pat, "%s\\*", path);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
+        fn(fd.cFileName, (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0, ud);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return 1;
+#else
+    DIR *d = opendir(path);
+    if (!d) return 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        char full[1024];
+        snprintf(full, sizeof full, "%s/%s", path, e->d_name);
+        struct stat st;
+        int is_dir = stat(full, &st) == 0 && S_ISDIR(st.st_mode);
+        fn(e->d_name, is_dir, ud);
+    }
+    closedir(d);
+    return 1;
+#endif
 }

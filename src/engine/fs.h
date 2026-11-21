@@ -37,4 +37,12 @@ FILE *fs_fopen(const char *path, const char *mode);
 /* Returns the current asset root (pointer to internal buffer — do not free). */
 const char *fs_get_root(void);
 
+/*
+ * fs_list_dir()
+ *   Call fn(name, is_dir, ud) for every entry of the directory at `path`
+ *   (an absolute or cwd-relative path — the asset root is NOT prepended).
+ *   "." and ".." are skipped. Returns 0 if the directory can't be opened.
+ */
+int fs_list_dir(const char *path, void (*fn)(const char *name, int is_dir, void *ud), void *ud);
+
 #endif /* FS_H */

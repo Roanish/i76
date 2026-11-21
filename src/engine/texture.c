@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "engine/pix.h"   /* vfs_lod — extension-aware PIX/PAK + loose-file resolver */
+#include "engine/mods.h"  /* presentation overrides (mods win over the archives) */
 
 /* .tmt header: count of index dims @+0x14, dim sizes @+0x18, name array @+0x40
  * (8-byte base names). We only need entry 0 for a static (non-animated) view. */
@@ -132,7 +133,7 @@ static void decode_vqm_buf(const void *vqm, size_t vsz, Texture *t)
     str_lower(cbk);
     if (!strchr(cbk, '.')) strncat(cbk, ".cbk", sizeof cbk - strlen(cbk) - 1);
     size_t csz = 0;
-    void *book = vfs_lod(cbk, &csz);   /* codebook may be pak'd or a direct file */
+    void *book = asset_present_read(cbk, &csz);   /* mod, else pak'd or a direct file */
     if (book) {
         decode_vqm(vqm, vsz, book, csz, t);
         free(book);
@@ -198,7 +199,17 @@ static bool decode_m16(const uint8_t *buf, size_t sz, Texture *t)
  * real base) -> ".vqm" (vector-quantized) -> ".map" (8-bit indexed) -> ".m16"
  * (8-bit indices + embedded 16-bit palette, quantized to the game palette).
  * .m16 is last: an 8-bit .vqm/.map sibling is preferred when present. */
-static void resolve_texture(const char *base, Texture *t, int depth)
+/* Source for one resolution pass: mod overrides only, or the base archives. */
+enum { SRC_MODS, SRC_BASE };
+static void *tex_read(const char *name, size_t *sz, int src)
+{
+    return src == SRC_MODS ? mods_read(name, sz) : vfs_lod(name, sz);
+}
+
+static void resolve_texture(const char *base, Texture *t, int depth);
+
+/* One pass over the extension priority from a single source. */
+static void resolve_texture_from(const char *base, Texture *t, int depth, int src)
 {
     char name[24];
     size_t sz;
@@ -206,7 +217,7 @@ static void resolve_texture(const char *base, Texture *t, int depth)
     if (depth > 3) return;
 
     snprintf(name, sizeof name, "%s.tmt", base);
-    if ((buf = vfs_lod(name, &sz))) {
+    if ((buf = tex_read(name, &sz, src))) {
         char m[20];
         tmt_entry0(buf, sz, m);
         free(buf);
@@ -219,25 +230,35 @@ static void resolve_texture(const char *base, Texture *t, int depth)
         }
     }
     snprintf(name, sizeof name, "%s.vqm", base);
-    if ((buf = vfs_lod(name, &sz))) {
+    if ((buf = tex_read(name, &sz, src))) {
         decode_vqm_buf(buf, sz, t);
         free(buf);
         if (t->pixels) return;
     }
     snprintf(name, sizeof name, "%s.map", base);
-    if ((buf = vfs_lod(name, &sz))) {
+    if ((buf = tex_read(name, &sz, src))) {
         decode_map(buf, sz, t);
         free(buf);
         if (t->pixels) return;
     }
     snprintf(name, sizeof name, "%s.m16", base);
-    if ((buf = vfs_lod(name, &sz))) {
+    if ((buf = tex_read(name, &sz, src))) {
         bool ok = decode_m16(buf, sz, t);
         free(buf);
         if (!ok)
             fprintf(stderr, "[tex] %s.m16: decode failed%s\n", base,
                     s_have_pal ? "" : " (no game palette set)");
     }
+}
+
+/* Mods first across EVERY extension, then the archives: a mod's "foo.map"
+ * must beat the archive's "foo.vqm" even though .vqm ranks higher within one
+ * source. (A base .tmt's entry names recurse through here too, so a mod can
+ * replace the pixels without shipping a .tmt.) */
+static void resolve_texture(const char *base, Texture *t, int depth)
+{
+    if (mods_count()) resolve_texture_from(base, t, depth, SRC_MODS);
+    if (!t->pixels)   resolve_texture_from(base, t, depth, SRC_BASE);
 }
 
 const Texture *texture_get(const char *rawname)

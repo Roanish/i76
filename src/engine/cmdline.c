@@ -25,6 +25,10 @@ void cmdline_parse(int argc, char *argv[], CmdlineArgs *out)
 
         if (strcmp(arg, "--assets") == 0 && i + 1 < argc) {
             strncpy(out->asset_root, argv[++i], sizeof(out->asset_root) - 1);
+        } else if (strcmp(arg, "--mods") == 0 && i + 1 < argc) {
+            strncpy(out->mods_root, argv[++i], sizeof(out->mods_root) - 1);
+        } else if (strcmp(arg, "--no-mods") == 0) {
+            out->no_mods = true;
         } else if (arg[0] == '-') {
             /*
              * Original flags — exact strings not yet reversed from cmdline.
@@ -35,6 +39,9 @@ void cmdline_parse(int argc, char *argv[], CmdlineArgs *out)
             strncpy(out->scenario, arg, sizeof(out->scenario) - 1);
         }
     }
+
+    if (!out->mods_root[0])
+        snprintf(out->mods_root, sizeof(out->mods_root), "%s/mods", out->asset_root);
 
     /* Derive is_multiplayer from scenario prefix — confirmed _strnicmp logic */
     if (strncasecmp(out->scenario, "mp", 2) == 0 ||

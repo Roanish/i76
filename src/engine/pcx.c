@@ -17,6 +17,7 @@
 
 #include "pcx.h"
 #include "vfs.h"
+#include "mods.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,7 +52,7 @@ static inline int buf_getc(Buf *b)
 PcxImage *pcx_load(const char *path)
 {
     size_t size;
-    uint8_t *data = vfs_read_file(path, &size);
+    uint8_t *data = asset_present_file(path, &size);   /* moddable */
     if (!data)
         return NULL; /* vfs already logged the error */
 

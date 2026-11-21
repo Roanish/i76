@@ -26,6 +26,7 @@
 #include "engine/vfs.h"
 #include "engine/pix.h"
 #include "engine/geomesh.h"
+#include "engine/mods.h"
 
 /* ----------------------------------------------------------------------- */
 /* Constants (all reversed)                                                  */
@@ -195,8 +196,17 @@ static void *default_loader(const char *name, size_t *out_size)
      * name isn't an indexed record it falls back to a loose VFS file (so whole
      * ".pak"/".geo" filenames still load directly). Mirrors the original's
      * vfs_lod -> vfs_lod_pak / vfs_lod_cached dispatch.
+     *
+     * PRESENTATION read: a mod file overrides the mesh. Bare record names are
+     * ".geo" records (the PIX index's bare-name rule), so look the mod up as
+     * "<name>.geo". NOTE: if collision/physics ever reads meshes, it must NOT
+     * go through this loader — the simulation reads base archives only.
      */
-    return vfs_lod(name, out_size);
+    char modname[64];
+    if (!strchr(name, '.')) snprintf(modname, sizeof modname, "%s.geo", name);
+    else                    snprintf(modname, sizeof modname, "%s", name);
+    void *b = mods_read(modname, out_size);
+    return b ? b : vfs_lod(name, out_size);
 }
 
 static void default_free(void *buf)

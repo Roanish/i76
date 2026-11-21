@@ -22,6 +22,7 @@
 #include "engine/geomesh.h"
 #include "engine/vfs.h"        /* vfs_read_file (palette load) */
 #include "engine/vehicle.h"
+#include "engine/mods.h"         /* asset_present_file (palette) */
 #include "engine/texture.h"
 #include "render/render.h"
 #include "render/softraster.h"
@@ -387,12 +388,12 @@ static void load_act_palette(const char *act_name, Rgb8 *pal)
     void *buf = NULL;
     if (act_name && act_name[0]) {
         snprintf(actname, sizeof actname, "%s", act_name);
-        buf = vfs_read_file(actname, &sz);
+        buf = asset_present_file(actname, &sz);
     }
     if (!buf || sz < 768) {
         vfs_free(buf); buf = NULL; sz = 0;
         strncpy(actname, "superpal.act", sizeof actname);
-        buf = vfs_read_file(actname, &sz);
+        buf = asset_present_file(actname, &sz);
     }
     if (buf && sz >= 768) {
         const uint8_t *p = buf;
