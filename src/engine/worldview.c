@@ -716,15 +716,19 @@ void worldview_run(const char *mission_path, RenderMode mode)
     float zfar  = scene->radius * 40.0f;       if (zfar  < 5000.0f) zfar  = 5000.0f;
 
     /* Player car (drive mode): starts at the scene centre, on the ground;
-     * SPACE toggles free-fly <-> drive. veh_R/veh_t = its world transform. */
+     * SPACE toggles free-fly <-> drive; O toggles orbit (inspect the car) and
+     * returns to the previous mode. veh_R/veh_t = its world transform. */
     DriveCar car;
     car_init(&car, scene, HS[hs_idx]);
     int drive = 0;
+    int orbit = 0;
+    /* Orbit camera about the car: yaw/pitch around it, distance = zoom. */
+    float orb_yaw = 0.0f, orb_pitch = 0.35f, orb_dist = 8.0f;
     float *veh_R = car.R;
     float  veh_t[3] = { car.x, car.y, car.z };
 
     fprintf(stdout, "[worldview] %d objects, %d terrain patches, start=%s. "
-                    "SPACE drive/fly, WASD/arrows, Shift boost, P hscale, TAB SW/HW, ESC.\n",
+                    "SPACE drive/fly, O orbit car, WASD/arrows, Shift boost, P hscale, TAB SW/HW, ESC.\n",
             scene->count, scene->patch_count,
             mode == RENDER_SOFTWARE ? "software" : "hardware");
 
@@ -742,11 +746,40 @@ void worldview_run(const char *mission_path, RenderMode mode)
         if (in.quit) break;
         if (in.pressed[PK_TAB])
             mode = (mode == RENDER_SOFTWARE) ? RENDER_HARDWARE : RENDER_SOFTWARE;
-        if (in.pressed[PK_SPACE]) drive = !drive;
+        if (in.pressed[PK_O]) {
+            orbit = !orbit;
+            /* Start behind the car (same side the chase cam looks from). */
+            if (orbit) orb_yaw = car.yaw + (float)M_PI;
+        }
+        if (in.pressed[PK_SPACE] && !orbit) drive = !drive;
         if (in.pressed[PK_P]) { hs_idx = (hs_idx + 1) % (int)(sizeof HS / sizeof HS[0]); terrain_dirty = 1; }
 
         float fwd[3];
-        if (drive) {
+        if (orbit) {
+            /* Orbit: car parked; arrows/AD rotate, WS pitch, QE zoom (Shift = fast). */
+            float rot = 1.6f * dt * (in.held[PK_LSHIFT] ? 2.5f : 1.0f);
+            if (in.held[PK_LEFT]  || in.held[PK_A]) orb_yaw   -= rot;
+            if (in.held[PK_RIGHT] || in.held[PK_D]) orb_yaw   += rot;
+            if (in.held[PK_UP]    || in.held[PK_W]) orb_pitch += rot;
+            if (in.held[PK_DOWN]  || in.held[PK_S]) orb_pitch -= rot;
+            if (orb_pitch >  1.5f) orb_pitch =  1.5f;
+            if (orb_pitch < -0.3f) orb_pitch = -0.3f;
+            float zoom = powf(in.held[PK_LSHIFT] ? 4.0f : 2.0f, dt);
+            if (in.held[PK_Q]) orb_dist *= zoom;
+            if (in.held[PK_E]) orb_dist /= zoom;
+            if (orb_dist <  2.0f) orb_dist =  2.0f;
+            if (orb_dist > 80.0f) orb_dist = 80.0f;
+
+            float focus[3] = { car.x, car.y + 1.0f, car.z };
+            float cp = cosf(orb_pitch);
+            eye[0] = focus[0] + cosf(orb_yaw) * cp * orb_dist;
+            eye[1] = focus[1] + sinf(orb_pitch) * orb_dist;
+            eye[2] = focus[2] + sinf(orb_yaw) * cp * orb_dist;
+            float cam_floor = sample_terrain_y(scene, eye[0], eye[2], HS[hs_idx]) + 0.4f;
+            if (eye[1] < cam_floor) eye[1] = cam_floor;
+            vsub(focus, eye, fwd);
+            vnorm(fwd);
+        } else if (drive) {
             car_tick(&car, scene, &in, dt, HS[hs_idx]);
             veh_t[0] = car.x; veh_t[1] = car.y; veh_t[2] = car.z;
 
@@ -863,7 +896,10 @@ void worldview_run(const char *mission_path, RenderMode mode)
         /* HUD text (into fb either way: transparent over HW, atop the SW scene). */
         if (font) {
             char line[160];
-            if (drive)
+            if (orbit)
+                snprintf(line, sizeof line, "%s   %s   ORBIT  dist %.1f   (arrows/WASD rotate, Q/E zoom, O exit)",
+                         mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE", orb_dist);
+            else if (drive)
                 snprintf(line, sizeof line, "%s   %s   DRIVE  %3.0f mph%s",
                          mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE",
                          fabsf(car.speed) * 2.237f, car.grounded ? "" : "  AIR");

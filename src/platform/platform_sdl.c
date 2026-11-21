@@ -103,6 +103,7 @@ static PlatformKey translate_key(SDL_Keycode sym)
         case SDLK_q:      return PK_Q;
         case SDLK_e:      return PK_E;
         case SDLK_p:      return PK_P;
+        case SDLK_o:      return PK_O;
         case SDLK_TAB:    return PK_TAB;
         case SDLK_LSHIFT: return PK_LSHIFT;
         default:          return PK_UNKNOWN;
