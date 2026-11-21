@@ -709,6 +709,189 @@ Tentative (inferred, bodies not fully seen): `FUN_004bd450/470/490/4d0/4f0/690` 
 
 ---
 
+## VDF vehicle definition — chunk table + VGEO part grid (2026-07-05)
+
+CONFIRMED by: the three VDF descriptor tables read from data, full decompile of every
+handler in the live table, and a byte-exact parse of the real `vdstag.vdf` (Dover Stag,
+88818 B): `28*31*0x64 = 86800` == the VGEO payload size EXACTLY; all 3x3s orthonormal
+(err <= 1e-4), every parent resolves. Found/decompiled headlessly (analyzeHeadless,
+read-only; handlers had no Ghidra functions defined — created transiently).
+
+**Three VDF descriptor tables** (0x10-byte entries, same `chunk_table_parse` format).
+Tags: `VDFC SOBJ VSHL VLOC VGEO VCHK LOBJ COLP WLOC [HLOC SPCS] EXIT`.
+- `00505328` — the FULL loader (12 entries). Live handlers below. **??? which caller
+  passes this table** (the parse call isn't in any decompiled function; likely an
+  undefined-function area).
+- `00505000` (9) — all payload handlers NULL except `VDFC→004b8300` (skip/probe variant).
+- `005053e8` (9) — only `VDFC→004b8c80` + `VSHL→004b8ce0` (damage-shell-only variant).
+
+**Live handlers (table 00505328, all bodies seen):**
+| tag | handler | role |
+|---|---|---|
+| VDFC | 004b8bf0 | veh config → entity+0x70 model fields (+0xa4,+0x124,+0x120,+0x480), 5 dwords → ctx+0x3c, +0xa5c |
+| SOBJ | 004b4060 | **same handler as .sdf structures** (already named SOBJ) |
+| VSHL | NULL | (in full table; shell loaded via table 005053e8's 004b8ce0) |
+| VLOC | 004b8d10 | mount-point child entities — std entity layout (3x3→+0x18, pos floats→doubles +0x40/48/50, via entity_create_named 004bd6c0). Special types: 0x23/0x24 "needle" gauges (→model+0x3f8/0x3fc), 0x26 headlight mask `hdlt_msk`+`hdlv_msk.geo` (→+0x440), 0x28 (→+0x398), 0x2a = 3 dwords →+0x12c/130/134 |
+| VGEO | 004b90b0 | the part grid — see below |
+| VCHK | 004b9110 | destructible chunks; entity_find_by_name (004bd6f0, "Chunk's parent object %s not found."), sets parent flag 0x100000, object_add_chunk (004a5e30, "Unable to add chunk") per 0x64-stride record |
+| LOBJ | 004b4ab0 | **same handler as .sdf** (light_register path) |
+| COLP | 004b9280 | 12 dwords → ctx[3..] collision params (skipped when entity type +0x6c == 8) |
+| WLOC | 004b92b0 | **6 wheel-location records x 0x38 bytes** → entity_ctx+4's +0x168 |
+| HLOC | 004b9710 | hardpoint locations, appended at model+0x428, stride 0xfc, count at +0xa60, max 7 |
+
+**VGEO (004b90b0):** payload `+0x08 u32 part_count`, `+0x0c` = **28 groups = 7 damage
+states x 4 LODs** (group g = state*4 + lod) of `part_count` x **0x64-byte part records**,
+split by `004b3110` (`group[i] = base + i*count*0x64` — contiguous). Then `004b3140`
+(the VDF twin of `structure_parts_build`) builds the parts:
+
+- 0x64 record = **the standard object_alloc record**: `+0x00 name[8]` (**mask each char
+  & 0x7f** — high bits may be set in the file), `+0x08` 3x3 col-major, `+0x2c` pos[3],
+  `+0x38 parent[8]` ("WORLD"/"none" → vehicle root, else sibling by name →
+  entity_find_by_name, fatal "Can't find parent %s for object %s"), `+0x5c u32 type`,
+  `+0x60 u32 flags`. (+0x40..+0x58 ??? unread by the builder.)
+- Parts are CREATED once from group (0,0) via `object_alloc(parent, rec, rec, 0, 1)`;
+  the other 27 groups only contribute mesh names.
+- Per (state,lod): mesh name = record name + **".geo"** (`004b3060` + suffix
+  `DAT_00504040 = ".geo"`; returns NULL for "none"/empty) → registered by NAME into the
+  part's obj_model node via `00438930` (0x74-byte node = 0x10-byte name slots + chain
+  ptr +0x70; ??? exact (node,slot) <- (lod,state) mapping — decompiler dropped the two
+  index args at these call sites; confirm from disasm if it matters).
+- Extra: if state==2 and root entity type +0x6c == 0x32, also registers the state-3 name.
+- Per-part callback `004b8ff0` registers well-known parts on the vehicle model by part
+  type: 0x41..0x46 → +0x408..0x41c (vdstag: 0x41=BDYF 0x42=BDYM 0x43=BDYB 0x44=BDYT —
+  body panels; 0x45/0x46 unused there), 0x47 → +0x3a0 (HLGT), 0x48 → +0x3a4 (BLGT),
+  0x26 → +0x440 (headlight mask).
+
+**Real-data findings (vdstag.vdf):** name encodes the grid — char[2] = damage state
+(DS**1**1BDYM → DS2../DS5..), char[3] = LOD (DS1**1** → DS1**3**/DS1**4**); NULL name =
+no mesh for that state/LOD. Wheels (BWLL/FWLL, type 0x3c) are parented to body panels
+with X=0 (centered) — actual wheel placement comes from WLOC's 6 records ???. 22 of 31
+records are name-NULL with types 0x1d..0x3c and cockpit-area positions — dash/interior
+mount points ???.
+
+**CONSEQUENCE FOR THE ENGINE:** there is NO new mesh format. The "83KB geometry blob"
+is just this record grid; every vehicle part mesh is a **standard OEG `.geo` pak record**
+(geomesh.c decodes it; the extension-aware PIX index resolves bare names → `.geo`
+already). Rendering a car = parse VGEO group (0,0), compose the parent chain
+(scene.c resolve_part logic), `geo_cache_acquire(name)` per part.
+
+## WLOC + .wdf wheels — tyre placement (2026-11-22)
+
+Bodies seen (headless, force-created): wloc_load 004b92b0, wheel_def_load 004b92f0,
+WGEO handler 004b9690, WDFC handler 004b9630 (garage/info variant table 00505578);
+in-game .wdf table **0x505548** = WDFC 004b9580 / WGEO 004b9690 / EXIT.
+- **WLOC** (vdf): 6 × 0x38 records copied verbatim to vehicle model +0x168 =
+  3 axles × (A, B). Record: +0x00 present flag, +0x04 3x3, +0x28 position (vehicle
+  frame), +0x34 ??? (e.g. 0x770198). vdstag: [0]/[1] = (±0.748, 0.378, 2.247) front,
+  [2]/[3] zero (no middle axle), [4]/[5] = (±0.748, 0.377, −0.959) rear; R identity.
+- **VCFC** +0x3e / +0x4b / +0x58 = wheel .wdf per axle → `wheel_def_load(wdf, ctx,
+  0/2/4)` ("null" = no wheels: chunk_file_parse returns true early).
+- **wheel_def_load** parses the .wdf with ctx {.., +0x10 wheel A obj, +0x14 wheel B obj};
+  then wheel A gets WLOC[i] (+0x04.. → entity +0x18..+0x38 matrix, +0x28.. → entity
+  +0x40/+0x48/+0x50 position doubles) and wheel B gets WLOC[i+1]; both stored in vehicle
+  model +0x3a8 + idx*4.
+- **WGEO** payload = [u32 count] + 16×count part records (0x64, same as VGEO);
+  part_groups_split(…, 0x10, count) → 16 groups; vdf_parts_build(groups[0..7] → wheel A,
+  4, 2) and (groups[8..15] → wheel B). wauto_3a.wdf: A = WA{1..4}{1,A}RWL3 (right),
+  B = …LWL3 (left), parent WORLD (= wheel object), offset (±0.841, 0.328, 0).
+- The tyre mesh is authored off-centre (WA11RWL3 x −0.841..−0.636, y −0.656..0); the
+  record offset puts the hub at the wheel-object origin → final right-front tyre x
+  0.75..0.95, y 0.05..0.71 (radius 0.328), flush with the body side (±0.96).
+- **WDFC** (garage handler 004b9630): +0x08 name[16] ("13in Stock"), +0x30 dword, +0x34
+  float ×2 (radius→diameter?) ???, +0x3c name ("whe01", sound/skid id?) ???.
+- VGEO's FWLL/BWLL (type 0x3c, full-width ±0.963, thin) are NOT tyres — axle / wheel-
+  well pieces ???.
+
+## VCF / VTF vehicle skin — placeholder face textures (2026-11-22)
+
+All bodies below seen via headless decompile (most had no Ghidra function defined —
+force-created read-only). Implemented in src/engine/vehicle.c (vehicle_load_vcf,
+vehicle_apply_skin, vehicle_face_texture) + worldview.c (TexRemap).
+
+**Chunk-handler argument rule (chunk_table_parse 004bccb0):** handler is called with
+`chunk + ((table[0].flags >> 1) & 1) * 8` — i.e. bit 1 of the FIRST table entry's
+flags decides whether every handler gets the chunk START (tag) or the payload. The VCF
+(0x820) and VTF (0x800) tables have bit 1 clear → offsets below are from the tag.
+
+**.vcf** (`vcf_load` 004b8400 → chunk_file_parse(name, 0x5052a8 [VCFC 004b8660 / SPEC
+004b8b60 / WEPN 004b98a0 / EXIT], 4)). VCFC handler 004b8660: `+0x18` vdf name[13] →
+chunk_file_parse(0x505328 VDF table, 0xc); `+0x25` vtf name[13] → chunk_file_parse(
+**0x505508**, 2); then 3× 004b92f0 on +0x3e/+0x4b/+0x58 (wheel defs?) ???, +0x32/+0x36/
++0x3a engine/brake/suspension ids → compnent.cdf; +0x65.. / +0x75.. armour/chassis
+floats into entity+0x70 +0x138..0x19c ???.
+- **CORRECTION:** there is no "gustag*.vtf". The vdf field is 13 bytes and its padding
+  holds uninitialised garbage (`vdstag.vdf\0gu`); the vtf at +0x25 is `stag1.vtf`.
+  vdstag1/2/3.vcf → stag1/2/3.vtf; p01ds01.vcf → stag3.vtf.
+
+**.vtf, in-game handler = VTFC 004ba600 (table 0x505508).** (Table 0x505528 / VTFC
+004bb030 is the GARAGE-menu variant: it only copies the colour name at +0x15; called via
+004b8b40 from 004b5230, which globs *.vtf to list paint colours.) Layout from tag:
+| off | content |
+|---|---|
+| +0x08 | vdf name[13] |
+| +0x15 | colour name[16] ("red") |
+| +0x25 + s*0x152 | damage state s = V1/V3/V5: four 6-slot groups FT,MD,BK,TP (group stride 0x4e) |
+| +0x15d | front-bumper slot (bound for V1/V3/V5 "FB FT") |
+| +0x16a | back-bumper slot (bound for V1/V3/V5 "BB BK") |
+| +0x41b | 12 debris `.map` names → 004a6020 (per-entity 0x10-stride copy) |
+| +0x4b7 | body `.map` (e.g. ds11bdy1.map) |
+Every slot is 13 bytes; a slot starting "null" (004c7e70, _strnicmp 4) is skipped.
+Side order within a group (strings 0x506114..0x5060ec): FT, BK, RT, LF, TP, UN.
+
+**Binding:** for each non-null slot, placeholder = prefix + side, e.g. "V1 FT " +
+"RT.map" (prefix strings 0x5060e4..0x50608c: V1/V3/V5 × FT/MD/BK/TP), and
+`tex_override_bind(model, placeholder, slot_name)` (0043c460) is called on the model in
+the group's vehicle slot: FT→+0x408, MD→+0x40c, BK→+0x410, TP→+0x414, FB→+0x418,
+BB→+0x41c (the part-type slots registered by 004b8ff0). Group helpers: 004baea0 (6-slot
+loop), 004bae60 (single slot). Finally 004bafa0 walks the whole entity tree (+0x64 child,
++0x60 sibling) binding "V1 BO DY.map" → +0x4b7 on EVERY part.
+Mesh faces literally name these placeholders ("V1 FT RT.MAP", "V1 BO DY.MAP" — seen in
+DS11BDYF/BDYM.geo); the compare is _stricmp on the full name.
+
+**tex_override_bind 0043c460(model, placeholder, real):** override table DAT_00531fb0
+(2029 buckets, key = (namehash ^ model_ptr), namehash = h*2 ^ (c & 0xdf)); each 0x48
+entry: +0x00 model, +0x04 current .map name, +0x14 placeholder, +0x24.. variant
+counters, +0x30 → texture-set record. Texture sets live in DAT_0052fe30 (by name): a
+`.map` name → 1-entry set; anything else is vfs_lod'ed and parsed as a **.tmt** by
+0043d970. Same-shape lookups: face_texture_bind 0043d070, 0043c7e0 (create entry).
+**tex_override_set_variant 0043cf30(model, placeholder, axis, value, reload):** picks
+set name index = Σ counters → strncpy current name, reload. Used by 004652c0 (panel
+damage: state 0..4 → variant 0,1,1,2,3 on placeholders "V1 xx yy.MAP", table
+0x4fa850 = 5 rows × 10 names × 13) and 00457fc0 (vehicle destroyed → variant 3).
+
+**.tmt format (0043d970):** +0x14 u32 ndims, +0x18.. dims (product = name count),
++0x28 float (anim rate? → set+0x14) ???, +0x2c flags (→ set+0x18; bit0 = animated,
+bit1 = mode) ???, +0x40 names[8] each + ".map". E.g. 1ds1FTRT.TMT: 1 dim × 4 =
+ds11ftl1/ds12ftl1/ds13ftl1/ds11bdy1 (damage progression by name — ???, consistent with 004652c0's variant 0..3).
+Pristine = index 0 (what texture.c tmt_entry0 already takes).
+
+---
+
+## Camera — FOV, projection, track-camera defaults (2026-07-05)
+
+CONFIRMED from camera_setup (00469dd0) + camera_apply (00469fb0) bodies and the camera
+init at ~00434xxx (export line region 34925):
+
+- `camera_setup(out, surface, fov_rad, y_aspect, far_clip, zoom)`; fov clamped, then
+  `cam[0x2c] = tan(fov/2)` (via the sincos helper FUN_0049c370). far_clip clamped to
+  [100, 100000]. The game calls it with **fov = 0x3fc90fda = pi/2 — 90 deg**, and
+  far = `DAT_004f36b4` (mission WDEF draw distance) defaulting to **150.0** (0x43160000).
+- `camera_apply(cam, zoom)`: zoom clamped [0.5, 8], **focal_x = half_viewport_WIDTH *
+  zoom / cam[0x2c]** (cam+0x08), focal_y = -cam[0x30] * focal_x (cam+0x0c). So the
+  90-deg FOV is HORIZONTAL; zoom > 1 narrows (zooms in). Default zoom 1.0 everywhere.
+- Track (chase) camera defaults, set in camera init: **pitch = 0x3f060a92 = pi/6
+  (30 deg)** (DAT_004f38b8?/DAT_004f38c0), **distance = 0x40b00000 = 5.5**
+  (DAT_004f38c8?/DAT_004f38cc). The track_yaw/pitch/distance_minus/plus/delta strings
+  (004f5738..) are INPUT BINDING names — the user can adjust these at runtime.
+- camera_set_view (00438840) = view-mode dispatcher: walks g_view_type_table pairs,
+  calls the matching g_view_fn_table entry, then camera_apply(&g_camera, 1.0).
+
+ENGINE: worldview.c uses hFOV 90 deg (converted to vertical for mat_perspective) and
+the 5.5 / 30-deg track camera in drive mode. The viewer keeps a long far plane on
+purpose (the original's 150 + fog is a fidelity feature for later).
+
+---
+
 ## game_session_run — Structure
 
 CONFIRMED by: full decompilation of `game_session_run` (FUN_00430eb0).

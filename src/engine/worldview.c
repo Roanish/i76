@@ -21,6 +21,7 @@
 #include "engine/scene.h"
 #include "engine/geomesh.h"
 #include "engine/vfs.h"        /* vfs_read_file (palette load) */
+#include "engine/vehicle.h"
 #include "engine/texture.h"
 #include "render/render.h"
 #include "render/softraster.h"
@@ -50,6 +51,15 @@ static void vcross(const float a[3], const float b[3], float o[3]) {
 }
 static void vnorm(float v[3]) {
     float l = sqrtf(vdot(v,v)); if (l>1e-6f){ v[0]/=l; v[1]/=l; v[2]/=l; }
+}
+static void mat3_mul(const float a[9], const float b[9], float o[9]) {
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            o[r*3+c] = a[r*3+0]*b[0*3+c] + a[r*3+1]*b[1*3+c] + a[r*3+2]*b[2*3+c];
+}
+static void mat3_vec(const float m[9], const float v[3], float o[3]) {
+    for (int r = 0; r < 3; r++)
+        o[r] = m[r*3+0]*v[0] + m[r*3+1]*v[1] + m[r*3+2]*v[2];
 }
 
 /* ----------------------------------------------------------------------- */
@@ -102,28 +112,53 @@ static void item_model(float m[16], const float R[9], const float t[3])
  * FUN_004953e0). `hscale` is now a debug multiplier on this (1.0 = exact). */
 #define TERRAIN_Y_SCALE 0.1f
 
-static float *build_terrain_verts(const TerrainPatch *p, float hscale,
-                                  uint32_t *out_count)
+/* Height (12-bit, unscaled) at a GLOBAL fine-grid point, searching all patches.
+ * Adjacent patches are contiguous on the global grid (patch at coarse (row,col)
+ * covers points [col*128, col*128+127]), so cross-patch lookups resolve the
+ * neighbour's border points — the original samples one global zone grid the
+ * same way (terrain_height_sample, FUN_004953e0). -1 if no patch covers it. */
+static float cell_h12(const Scene *s, long gx, long gz)
+{
+    for (int i = 0; i < s->patch_count; i++) {
+        const TerrainPatch *p = &s->patches[i];
+        long lx = gx - (long)lroundf(p->origin[0] / p->cell);
+        long lz = gz - (long)lroundf(p->origin[1] / p->cell);
+        if (lx < 0 || lz < 0 || lx >= p->dim || lz >= p->dim) continue;
+        return (float)p->heights[lz * p->dim + lx];
+    }
+    return -1.0f;
+}
+
+static float *build_terrain_verts(const Scene *s, const TerrainPatch *p,
+                                  float hscale, uint32_t *out_count)
 {
     int n = p->dim, step = TERRAIN_STEP;
-    int cells = (n - 1) / step;
+    long c0 = lroundf(p->origin[0] / p->cell);
+    long r0 = lroundf(p->origin[1] / p->cell);
+    int cells = (n + step - 1) / step;
     if (cells < 1) return NULL;
 
-    uint32_t vcount = (uint32_t)cells * cells * 6;
-    float *v = malloc((size_t)vcount * MV * sizeof(float));
+    uint32_t vmax = (uint32_t)cells * cells * 6;
+    float *v = malloc((size_t)vmax * MV * sizeof(float));
     if (!v) return NULL;
 
+    /* Quads run to the patch EDGE; far corners on the boundary row/column pull
+     * heights from the adjacent patch via the global grid, closing the seam.
+     * Where there is no neighbour (world edge) the quad is skipped. */
     float *w = v;
-    for (int gz = 0; gz + step < n; gz += step) {
-        for (int gx = 0; gx + step < n; gx += step) {
+    for (int gz = 0; gz < n; gz += step) {
+        for (int gx = 0; gx < n; gx += step) {
             int cx[4] = { gx, gx+step, gx+step, gx }, cz[4] = { gz, gz, gz+step, gz+step };
             float c[4][3];
+            int ok = 1;
             for (int i = 0; i < 4; i++) {
-                int h = p->heights[cz[i] * n + cx[i]];
+                float h = cell_h12(s, c0 + cx[i], r0 + cz[i]);
+                if (h < 0.0f) { ok = 0; break; }
                 c[i][0] = p->origin[0] + cx[i] * p->cell;
                 c[i][1] = h * (TERRAIN_Y_SCALE * hscale);
                 c[i][2] = p->origin[1] + cz[i] * p->cell;
             }
+            if (!ok) continue;
             int quad[6] = { 0,1,2, 0,2,3 };
             for (int t = 0; t < 6; t++) {
                 const float *a = c[quad[t]];
@@ -136,29 +171,26 @@ static float *build_terrain_verts(const TerrainPatch *p, float hscale,
     return v;
 }
 
-/* Terrain world-Y under (x,z): find the covering patch and bilinearly
- * interpolate the 4 surrounding 12-bit heights, scaled by 0.1 — faithful to
- * nitro.exe terrain_height_sample (FUN_004953e0). 0 if outside all patches. */
+/* Terrain world-Y under (x,z): bilinear over the 4 surrounding global grid
+ * points, scaled by 0.1 — faithful to nitro.exe terrain_height_sample
+ * (FUN_004953e0), including across patch boundaries. Missing neighbours fall
+ * back to the base corner (the viewer has no default zone slab); 0 if (x,z)
+ * is outside all patches. */
 static float sample_terrain_y(const Scene *s, float x, float z, float hscale)
 {
-    for (int i = 0; i < s->patch_count; i++) {
-        const TerrainPatch *p = &s->patches[i];
-        float ext = p->dim * p->cell;
-        if (x < p->origin[0] || x >= p->origin[0] + ext ||
-            z < p->origin[1] || z >= p->origin[1] + ext) continue;
-        float cxf = (x - p->origin[0]) / p->cell;
-        float czf = (z - p->origin[1]) / p->cell;
-        int fx = (int)cxf, fz = (int)czf;
-        float tx = cxf - fx, tz = czf - fz;          /* fractional cell offset */
-        int fx1 = fx + 1 < p->dim ? fx + 1 : fx;
-        int fz1 = fz + 1 < p->dim ? fz + 1 : fz;
-        float h00 = p->heights[fz  * p->dim + fx ], h10 = p->heights[fz  * p->dim + fx1];
-        float h01 = p->heights[fz1 * p->dim + fx ], h11 = p->heights[fz1 * p->dim + fx1];
-        float hx0 = h00 + (h10 - h00) * tx;
-        float hx1 = h01 + (h11 - h01) * tx;
-        return (hx0 + (hx1 - hx0) * tz) * (TERRAIN_Y_SCALE * hscale);
-    }
-    return 0.0f;
+    if (s->patch_count == 0) return 0.0f;
+    float cell = s->patches[0].cell;
+    float cxf = x / cell, czf = z / cell;
+    long fx = (long)floorf(cxf), fz = (long)floorf(czf);
+    float tx = cxf - fx, tz = czf - fz;
+    float h00 = cell_h12(s, fx, fz);
+    if (h00 < 0.0f) return 0.0f;
+    float h10 = cell_h12(s, fx + 1, fz);     if (h10 < 0.0f) h10 = h00;
+    float h01 = cell_h12(s, fx, fz + 1);     if (h01 < 0.0f) h01 = h00;
+    float h11 = cell_h12(s, fx + 1, fz + 1); if (h11 < 0.0f) h11 = h00;
+    float hx0 = h00 + (h10 - h00) * tx;
+    float hx1 = h01 + (h11 - h01) * tx;
+    return (hx0 + (hx1 - hx0) * tz) * (TERRAIN_Y_SCALE * hscale);
 }
 
 /* Build the road ribbon as a [px,py,pz, u,v] triangle soup, draped on terrain.
@@ -194,6 +226,138 @@ static float *build_road_verts(const Scene *s, float hscale, uint32_t *out_count
     }
     *out_count = (uint32_t)(w - v) / MV;
     return v;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Drive-mode car — arcade physics + terrain collision (test harness)        */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Feel constants. These are HARNESS values (units = world units ≈ metres,
+ * matching the Stag's 5-unit length), NOT reversed from the original — the
+ * real per-frame vehicle sim (compnent.cdf ENGN/BRAK/SUSP tables) is future
+ * work. Gravity 9.8 matches the engine's own ballistic constant (flamer).
+ */
+#define CAR_ACCEL      12.0f   /* m/s^2 throttle                            */
+#define CAR_ACCEL_BOOST 22.0f  /* m/s^2 with Shift                          */
+#define CAR_BRAKE      25.0f   /* m/s^2 braking (S while moving forward)    */
+#define CAR_REV_ACCEL   8.0f   /* m/s^2 reversing                           */
+#define CAR_DRAG        0.25f  /* /s   lumped aero+rolling (vmax=accel/drag)*/
+#define CAR_SPEED_MAX  80.0f
+#define CAR_SPEED_MIN -12.0f
+#define CAR_TURN_RADIUS 5.0f   /* m    low-speed steering-lock radius       */
+#define CAR_GRIP_LAT    8.0f   /* m/s^2 lateral grip cap (yawrate = g/v)    */
+#define CAR_GRAVITY     9.8f
+#define CAR_WALL_STEP   1.2f   /* m    ground rise in one step = a wall     */
+#define CAR_WHEELBASE   3.2f   /* Stag: FWLL z 2.24 - BWLL z -0.95          */
+#define CAR_HALFTRACK   0.9f
+#define CAR_LEAN_RATE  10.0f   /* /s   orientation smoothing toward terrain */
+
+typedef struct {
+    float x, y, z;
+    float yaw;          /* heading; model +Z (BDYF nose) faces along it */
+    float speed;        /* signed, along heading                        */
+    float vy;           /* vertical velocity (airborne)                 */
+    int   grounded;
+    float R[9];         /* orientation (row-major), smoothed            */
+} DriveCar;
+
+static void car_init(DriveCar *c, const Scene *s, float hscale)
+{
+    memset(c, 0, sizeof *c);
+    c->x = s->center[0];
+    c->z = s->center[2];
+    c->y = sample_terrain_y(s, c->x, c->z, hscale);
+    c->grounded = 1;
+    c->R[0] = 0; c->R[1] = 0; c->R[2] = 1;
+    c->R[3] = 0; c->R[4] = 1; c->R[5] = 0;
+    c->R[6] = -1; c->R[7] = 0; c->R[8] = 0;
+}
+
+static void car_tick(DriveCar *c, const Scene *s, const RawInputState *in,
+                     float dt, float hscale)
+{
+    float steer    = (in->held[PK_D] || in->held[PK_RIGHT] ? 1.0f : 0.0f)
+                   - (in->held[PK_A] || in->held[PK_LEFT]  ? 1.0f : 0.0f);
+    int   throttle = in->held[PK_W] || in->held[PK_UP];
+    int   brake    = in->held[PK_S] || in->held[PK_DOWN];
+
+    /* Longitudinal: throttle / brake-then-reverse / drag. */
+    if (throttle) c->speed += (in->held[PK_LSHIFT] ? CAR_ACCEL_BOOST : CAR_ACCEL) * dt;
+    if (brake)    c->speed -= (c->speed > 0.5f ? CAR_BRAKE : CAR_REV_ACCEL) * dt;
+    c->speed -= c->speed * CAR_DRAG * dt;
+    if (c->speed > CAR_SPEED_MAX) c->speed = CAR_SPEED_MAX;
+    if (c->speed < CAR_SPEED_MIN) c->speed = CAR_SPEED_MIN;
+
+    /* Steering: yaw rate = v/R at low speed (steering lock), grip-capped
+     * (a_lat <= CAR_GRIP_LAT => yawrate <= g/v) at high speed. Sign follows
+     * the velocity so reversing steers like a real car. No steering in air. */
+    float av = fabsf(c->speed);
+    if (c->grounded && av > 0.05f) {
+        float yr = av / CAR_TURN_RADIUS;
+        float cap = CAR_GRIP_LAT / av;
+        if (cap < yr) yr = cap;
+        c->yaw += steer * yr * (c->speed < 0 ? -1.0f : 1.0f) * dt;
+    }
+    float dx = cosf(c->yaw), dz = sinf(c->yaw);
+
+    /* Horizontal move, blocked by walls (a big ground step in one frame). */
+    float nx = c->x + dx * c->speed * dt;
+    float nz = c->z + dz * c->speed * dt;
+    float g_ahead = sample_terrain_y(s, nx, nz, hscale);
+    if (c->grounded && g_ahead - c->y > CAR_WALL_STEP) {
+        c->speed = -c->speed * 0.1f;           /* thump into the cliff */
+    } else {
+        c->x = nx;
+        c->z = nz;
+    }
+
+    /* Vertical: gravity, then the terrain is a hard floor. Cresting a ridge
+     * leaves the ground (y stays, gravity arcs it down); slopes push the car
+     * up via the clamp. */
+    c->vy -= CAR_GRAVITY * dt;
+    c->y += c->vy * dt;
+    float ground = sample_terrain_y(s, c->x, c->z, hscale);
+    if (c->y <= ground) {
+        c->y = ground;
+        if (c->vy < 0) c->vy = 0;
+        c->grounded = 1;
+    } else {
+        c->grounded = (c->y - ground) < 0.05f;
+    }
+
+    /* Orientation: on the ground, lean the basis into the terrain slope
+     * sampled across the wheelbase/track; airborne keeps the last attitude.
+     * Basis columns = (right, up, fwd); smoothed to avoid step jitter. */
+    if (c->grounded) {
+        float hf = sample_terrain_y(s, c->x + dx * (CAR_WHEELBASE * 0.5f),
+                                       c->z + dz * (CAR_WHEELBASE * 0.5f), hscale);
+        float hb = sample_terrain_y(s, c->x - dx * (CAR_WHEELBASE * 0.5f),
+                                       c->z - dz * (CAR_WHEELBASE * 0.5f), hscale);
+        float hr = sample_terrain_y(s, c->x + dz * CAR_HALFTRACK,
+                                       c->z - dx * CAR_HALFTRACK, hscale);
+        float hl = sample_terrain_y(s, c->x - dz * CAR_HALFTRACK,
+                                       c->z + dx * CAR_HALFTRACK, hscale);
+        float f[3] = { dx * CAR_WHEELBASE, hf - hb, dz * CAR_WHEELBASE };
+        float r[3] = { dz * CAR_HALFTRACK * 2, hr - hl, -dx * CAR_HALFTRACK * 2 };
+        vnorm(f);
+        float u[3]; vcross(f, r, u); vnorm(u);
+        vcross(u, f, r); vnorm(r);
+        float k = 1.0f - expf(-CAR_LEAN_RATE * dt);
+        float tgt[9] = { r[0], u[0], f[0],
+                         r[1], u[1], f[1],
+                         r[2], u[2], f[2] };
+        for (int i = 0; i < 9; i++) c->R[i] += (tgt[i] - c->R[i]) * k;
+        /* Re-orthonormalise the smoothed basis (columns). */
+        float cf[3] = { c->R[2], c->R[5], c->R[8] };
+        float cr[3] = { c->R[0], c->R[3], c->R[6] };
+        vnorm(cf);
+        float cu[3]; vcross(cf, cr, cu); vnorm(cu);
+        vcross(cu, cf, cr);
+        c->R[0] = cr[0]; c->R[1] = cu[0]; c->R[2] = cf[0];
+        c->R[3] = cr[1]; c->R[4] = cu[1]; c->R[5] = cf[1];
+        c->R[6] = cr[2]; c->R[7] = cu[2]; c->R[8] = cf[2];
+    }
 }
 
 /* ----------------------------------------------------------------------- */
@@ -267,14 +431,27 @@ static void build_checker(const Rgb8 *pal)
             s_checker.pixels[y * W + x] = ((x / 8 + y / 8) & 1) ? a : b;
 }
 
+/* Face texture remap: a vehicle part's face names are skin placeholders
+ * ("V1 FT RT.MAP") resolved through the .vtf bindings. NULL = use the face
+ * name as-is (scene objects). */
+typedef struct { const VehicleModel *veh; int part; } TexRemap;
+
+static const Texture *face_texture(const GeoMesh *m, int f, const TexRemap *rm)
+{
+    const char *name = &m->face_tex[f * 16];
+    if (rm) name = vehicle_face_texture(rm->veh, rm->part, name);
+    return texture_get(name);
+}
+
 /* Software: draw one scene item's mesh, textured per face (untextured faces use
  * the nearest palette index to the face colour bytes). */
-static void draw_item_sw(SoftTarget *t, const SceneItem *it, const Rgb8 *pal)
+static void draw_item_sw(SoftTarget *t, const SceneItem *it, const Rgb8 *pal,
+                         const TexRemap *rm)
 {
     const GeoMesh *m = it->mesh;
     if (!m) return;
     for (int f = 0; f < m->num_faces; f++) {
-        const Texture *tex = texture_get(&m->face_tex[f * 16]);
+        const Texture *tex = face_texture(m, f, rm);
         uint8_t flat = 0;
         if (!tex) {
             /* Texture absent from this archive: show the UV-mapped debug checker
@@ -352,9 +529,10 @@ static RenderTexture *gpu_tex_for_flat(uint8_t idx)
 
 /* Resolve a face to its GPU texture, exactly mirroring draw_item_sw: the decoded
  * texture, else the UV debug checker, else a 1x1 of the face's flat colour. */
-static RenderTexture *resolve_face_gpu_tex(const GeoMesh *m, int f, const Rgb8 *pal)
+static RenderTexture *resolve_face_gpu_tex(const GeoMesh *m, int f, const Rgb8 *pal,
+                                           const TexRemap *rm)
 {
-    const Texture *t = texture_get(&m->face_tex[f * 16]);
+    const Texture *t = face_texture(m, f, rm);
     if (t) return gpu_tex_for(t);
     if (s_checker.pixels) return gpu_tex_for(&s_checker);
     const uint8_t *fc = &m->face_color[f * 3];
@@ -370,12 +548,15 @@ typedef struct { RenderMesh *gpu; const RenderTexture *tex; } Batch;
 
 typedef struct {
     const GeoMesh *key;
+    TexRemap       remap;      /* part of the key: same mesh, different skin */
+    int            has_remap;
     Batch         *batches;
     int            batch_count;
 } MeshEntry;
 
 /* Build the per-texture GPU batches for one mesh. */
-static void build_mesh_batches(MeshEntry *e, const GeoMesh *m, const Rgb8 *pal)
+static void build_mesh_batches(MeshEntry *e, const GeoMesh *m, const Rgb8 *pal,
+                               const TexRemap *rm)
 {
     e->batches = NULL;
     e->batch_count = 0;
@@ -383,7 +564,7 @@ static void build_mesh_batches(MeshEntry *e, const GeoMesh *m, const Rgb8 *pal)
 
     const RenderTexture **ftex = malloc(sizeof(*ftex) * m->num_faces);
     for (int f = 0; f < m->num_faces; f++)
-        ftex[f] = resolve_face_gpu_tex(m, f, pal);
+        ftex[f] = resolve_face_gpu_tex(m, f, pal, rm);
 
     /* Distinct textures used by this mesh. */
     const RenderTexture **distinct = malloc(sizeof(*distinct) * m->num_faces);
@@ -428,14 +609,18 @@ static void build_mesh_batches(MeshEntry *e, const GeoMesh *m, const Rgb8 *pal)
 }
 
 static MeshEntry *acquire_mesh(MeshEntry *map, int *count, const GeoMesh *gm,
-                               const Rgb8 *pal)
+                               const Rgb8 *pal, const TexRemap *rm)
 {
     for (int i = 0; i < *count; i++)
-        if (map[i].key == gm) return &map[i];
+        if (map[i].key == gm && map[i].has_remap == (rm != NULL) &&
+            (!rm || (map[i].remap.veh == rm->veh && map[i].remap.part == rm->part)))
+            return &map[i];
 
     MeshEntry *e = &map[(*count)++];
     e->key = gm;
-    build_mesh_batches(e, gm, pal);
+    e->has_remap = rm != NULL;
+    if (rm) e->remap = *rm;
+    build_mesh_batches(e, gm, pal, rm);
     return e;
 }
 
@@ -448,6 +633,11 @@ void worldview_run(const char *mission_path, RenderMode mode)
         fprintf(stderr, "[worldview] failed to load %s\n", mission_path);
         return;
     }
+
+    /* Player car: the Dover Stag chassis (drive mode; also parked when flying).
+     * Parts are vehicle-root-relative; the world transform is composed per
+     * frame from the drive-mode position/heading. */
+    VehicleModel *veh = vehicle_load_vcf("vdstag1.vcf");   /* vdstag.vdf + stag1.vtf */
 
     /* Terrain — both representations, rebuilt when the height scale changes. */
     /* The real vertical scale is now known (TERRAIN_Y_SCALE = 0.1 on the 12-bit
@@ -494,12 +684,19 @@ void worldview_run(const char *mission_path, RenderMode mode)
 
     /* Per-object meshes (deduped) → per-texture GPU batches; needs the palette
      * resolved above, so this runs after the texture/palette setup. */
-    MeshEntry *mesh_map = calloc((size_t)scene->count + 1, sizeof(*mesh_map));
+    int veh_parts = veh ? veh->count : 0;
+    MeshEntry *mesh_map = calloc((size_t)scene->count + veh_parts + 1, sizeof(*mesh_map));
     int mesh_map_count = 0;
     MeshEntry **item = calloc((size_t)scene->count, sizeof(*item));
     for (int i = 0; i < scene->count; i++)
         if (scene->items[i].mesh)
-            item[i] = acquire_mesh(mesh_map, &mesh_map_count, scene->items[i].mesh, pal_sw);
+            item[i] = acquire_mesh(mesh_map, &mesh_map_count, scene->items[i].mesh, pal_sw, NULL);
+    MeshEntry **veh_item = calloc((size_t)(veh_parts ? veh_parts : 1), sizeof(*veh_item));
+    for (int i = 0; i < veh_parts; i++)
+        if (veh->parts[i].mesh) {
+            TexRemap rm = { veh, i };
+            veh_item[i] = acquire_mesh(mesh_map, &mesh_map_count, veh->parts[i].mesh, pal_sw, &rm);
+        }
 
     /* Software framebuffer + depth. */
     static uint8_t fb[FB_W * FB_H];
@@ -518,11 +715,22 @@ void worldview_run(const char *mission_path, RenderMode mode)
     float znear = scene->radius * 0.01f;       if (znear < 0.5f)    znear = 0.5f;
     float zfar  = scene->radius * 40.0f;       if (zfar  < 5000.0f) zfar  = 5000.0f;
 
+    /* Player car (drive mode): starts at the scene centre, on the ground;
+     * SPACE toggles free-fly <-> drive. veh_R/veh_t = its world transform. */
+    DriveCar car;
+    car_init(&car, scene, HS[hs_idx]);
+    int drive = 0;
+    float *veh_R = car.R;
+    float  veh_t[3] = { car.x, car.y, car.z };
+
     fprintf(stdout, "[worldview] %d objects, %d terrain patches, start=%s. "
-                    "WASD move, Q/E down/up, arrows look, Shift boost, "
-                    "P height-scale, TAB SW/HW, ESC quit.\n",
+                    "SPACE drive/fly, WASD/arrows, Shift boost, P hscale, TAB SW/HW, ESC.\n",
             scene->count, scene->patch_count,
             mode == RENDER_SOFTWARE ? "software" : "hardware");
+
+    /* Discard anything buffered while videos played / the scene loaded, so
+     * stale presses don't fire viewer actions on the first frame. */
+    platform_flush_events();
 
     uint64_t last = platform_get_ticks();
     while (1) {
@@ -534,36 +742,58 @@ void worldview_run(const char *mission_path, RenderMode mode)
         if (in.quit) break;
         if (in.pressed[PK_TAB])
             mode = (mode == RENDER_SOFTWARE) ? RENDER_HARDWARE : RENDER_SOFTWARE;
+        if (in.pressed[PK_SPACE]) drive = !drive;
         if (in.pressed[PK_P]) { hs_idx = (hs_idx + 1) % (int)(sizeof HS / sizeof HS[0]); terrain_dirty = 1; }
 
-        /* Look */
-        float look = 1.4f * dt;
-        if (in.held[PK_LEFT])  yaw   -= look;
-        if (in.held[PK_RIGHT]) yaw   += look;
-        if (in.held[PK_UP])    pitch += look;
-        if (in.held[PK_DOWN])  pitch -= look;
-        if (pitch >  1.5f) pitch =  1.5f;
-        if (pitch < -1.5f) pitch = -1.5f;
+        float fwd[3];
+        if (drive) {
+            car_tick(&car, scene, &in, dt, HS[hs_idx]);
+            veh_t[0] = car.x; veh_t[1] = car.y; veh_t[2] = car.z;
 
-        float cp = cosf(pitch), sp = sinf(pitch), cy = cosf(yaw), sy = sinf(yaw);
-        float fwd[3]   = { cp*cy, sp, cp*sy };
-        float wup[3]   = { 0, 1, 0 };
-        float right[3]; vcross(fwd, wup, right); vnorm(right);
+            /* Track (chase) camera — defaults reversed from nitro.exe camera
+             * init: track_distance 5.5 (0x40b00000), track_pitch pi/6
+             * (0x3f060a92). Rigid horizontal-heading mount, aimed at the car;
+             * clamped just above the terrain so it can't dip underground. */
+            const float cam_dist = 5.5f, cam_pitch = 0.5235988f;
+            float dx = cosf(car.yaw), dz = sinf(car.yaw);
+            eye[0] = car.x - dx * cam_dist * cosf(cam_pitch);
+            eye[1] = car.y + cam_dist * sinf(cam_pitch);
+            eye[2] = car.z - dz * cam_dist * cosf(cam_pitch);
+            float cam_floor = sample_terrain_y(scene, eye[0], eye[2], HS[hs_idx]) + 0.4f;
+            if (eye[1] < cam_floor) eye[1] = cam_floor;
+            fwd[0] = car.x - eye[0];
+            fwd[1] = (car.y + 1.0f) - eye[1];
+            fwd[2] = car.z - eye[2];
+            vnorm(fwd);
+        } else {
+            /* Free-fly: arrows look, WASD/QE move, Shift boost. */
+            float look = 1.4f * dt;
+            if (in.held[PK_LEFT])  yaw   -= look;
+            if (in.held[PK_RIGHT]) yaw   += look;
+            if (in.held[PK_UP])    pitch += look;
+            if (in.held[PK_DOWN])  pitch -= look;
+            if (pitch >  1.5f) pitch =  1.5f;
+            if (pitch < -1.5f) pitch = -1.5f;
 
-        /* Move */
-        float spd = base_speed * dt * (in.held[PK_LSHIFT] ? 4.0f : 1.0f);
-        if (in.held[PK_W]) for (int i=0;i<3;i++) eye[i] += fwd[i]   * spd;
-        if (in.held[PK_S]) for (int i=0;i<3;i++) eye[i] -= fwd[i]   * spd;
-        if (in.held[PK_D]) for (int i=0;i<3;i++) eye[i] += right[i] * spd;
-        if (in.held[PK_A]) for (int i=0;i<3;i++) eye[i] -= right[i] * spd;
-        if (in.held[PK_E]) eye[1] += spd;
-        if (in.held[PK_Q]) eye[1] -= spd;
+            float cp = cosf(pitch), sp = sinf(pitch), cy = cosf(yaw), sy = sinf(yaw);
+            fwd[0] = cp*cy; fwd[1] = sp; fwd[2] = cp*sy;
+            float wup[3]   = { 0, 1, 0 };
+            float right[3]; vcross(fwd, wup, right); vnorm(right);
+
+            float spd = base_speed * dt * (in.held[PK_LSHIFT] ? 4.0f : 1.0f);
+            if (in.held[PK_W]) for (int i=0;i<3;i++) eye[i] += fwd[i]   * spd;
+            if (in.held[PK_S]) for (int i=0;i<3;i++) eye[i] -= fwd[i]   * spd;
+            if (in.held[PK_D]) for (int i=0;i<3;i++) eye[i] += right[i] * spd;
+            if (in.held[PK_A]) for (int i=0;i<3;i++) eye[i] -= right[i] * spd;
+            if (in.held[PK_E]) eye[1] += spd;
+            if (in.held[PK_Q]) eye[1] -= spd;
+        }
 
         if (terrain_dirty) {
             for (int i = 0; i < scene->patch_count; i++) {
                 free(ter_cpu[i]);
                 if (ter_gpu[i]) render_mesh_destroy(ter_gpu[i]);
-                ter_cpu[i] = build_terrain_verts(&scene->patches[i], HS[hs_idx], &ter_vc[i]);
+                ter_cpu[i] = build_terrain_verts(scene, &scene->patches[i], HS[hs_idx], &ter_vc[i]);
                 ter_gpu[i] = ter_cpu[i] ? render_mesh_create(ter_cpu[i], ter_vc[i]) : NULL;
             }
             free(road_cpu);
@@ -573,10 +803,16 @@ void worldview_run(const char *mission_path, RenderMode mode)
             terrain_dirty = 0;
         }
 
-        /* View + projection (shared by both backends). */
+        /* View + projection (shared by both backends). FOV is the original's:
+         * 90 deg HORIZONTAL (camera_setup arg 0x3fc90fda = pi/2 at zoom 1.0;
+         * cam[0x2c] = tan(fov/2) against the viewport half-WIDTH). Converted
+         * to the vertical FOV our mat_perspective takes: 73.7 deg at 4:3.
+         * (Original far plane is 150 / mission WDEF value; the dev viewer
+         * deliberately keeps its long draw distance instead.) */
+        float fovy = 2.0f * atanf(tanf(0.25f * (float)M_PI) * (float)FB_H / (float)FB_W);
         float view[16], proj[16], identity[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
         mat_lookat(view, eye, fwd);
-        mat_perspective(proj, 1.05f, (float)FB_W / FB_H, znear, zfar);
+        mat_perspective(proj, fovy, (float)FB_W / FB_H, znear, zfar);
 
         render_begin_frame();
 
@@ -592,6 +828,16 @@ void worldview_run(const char *mission_path, RenderMode mode)
                 for (int b = 0; b < item[i]->batch_count; b++)
                     render_3d_draw(item[i]->batches[b].gpu, model, item[i]->batches[b].tex);
             }
+            for (int i = 0; i < veh_parts; i++) {
+                if (!veh_item[i]) continue;
+                float Rw[9], tw[3], model[16];
+                mat3_mul(veh_R, veh->parts[i].R, Rw);
+                mat3_vec(veh_R, veh->parts[i].t, tw);
+                for (int k = 0; k < 3; k++) tw[k] += veh_t[k];
+                item_model(model, Rw, tw);
+                for (int b = 0; b < veh_item[i]->batch_count; b++)
+                    render_3d_draw(veh_item[i]->batches[b].gpu, model, veh_item[i]->batches[b].tex);
+            }
             memset(fb, 0, sizeof fb);   /* transparent HUD overlay */
         } else {
             soft_clear(&tgt, s_sky_idx);
@@ -602,18 +848,31 @@ void worldview_run(const char *mission_path, RenderMode mode)
             if (road_cpu)
                 draw_terrain_sw(&tgt, road_cpu, road_vc, NULL, road_idx);
             for (int i = 0; i < scene->count; i++)
-                draw_item_sw(&tgt, &scene->items[i], pal_sw);
+                draw_item_sw(&tgt, &scene->items[i], pal_sw, NULL);
+            for (int i = 0; i < veh_parts; i++) {
+                if (!veh->parts[i].mesh) continue;
+                SceneItem part = veh->parts[i];      /* world = veh * part */
+                mat3_mul(veh_R, veh->parts[i].R, part.R);
+                mat3_vec(veh_R, veh->parts[i].t, part.t);
+                for (int k = 0; k < 3; k++) part.t[k] += veh_t[k];
+                TexRemap rm = { veh, i };
+                draw_item_sw(&tgt, &part, pal_sw, &rm);
+            }
         }
 
         /* HUD text (into fb either way: transparent over HW, atop the SW scene). */
         if (font) {
             char line[160];
-            snprintf(line, sizeof line,
-                     "%s   %s   eye %.0f %.0f %.0f   hscale %.2f",
-                     mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE",
-                     eye[0], eye[1], eye[2], HS[hs_idx]);
+            if (drive)
+                snprintf(line, sizeof line, "%s   %s   DRIVE  %3.0f mph%s",
+                         mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE",
+                         fabsf(car.speed) * 2.237f, car.grounded ? "" : "  AIR");
+            else
+                snprintf(line, sizeof line, "%s   %s   FLY  eye %.0f %.0f %.0f   hscale %.2f",
+                         mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE",
+                         eye[0], eye[1], eye[2], HS[hs_idx]);
             font_draw(font, line, fb, FB_W, FB_H, 8, 8, IDX_TEXT);
-            font_draw(font, "WASD MOVE  Q/E DOWN/UP  ARROWS LOOK  SHIFT BOOST  P HSCALE  TAB SW/HW  ESC",
+            font_draw(font, "SPACE DRIVE/FLY  WASD/ARROWS  SHIFT BOOST  P HSCALE  TAB SW/HW  ESC",
                       fb, FB_W, FB_H, 8, FB_H - 16, IDX_DIM);
         }
 
@@ -639,9 +898,10 @@ void worldview_run(const char *mission_path, RenderMode mode)
     for (int i = 0; i < s_gtex_count; i++)
         if (s_gtex[i].gpu) render_texture_destroy(s_gtex[i].gpu);
     s_gtex_count = 0;
-    free(mesh_map); free(item); free(ter_cpu); free(ter_vc); free(ter_gpu);
+    free(mesh_map); free(item); free(veh_item); free(ter_cpu); free(ter_vc); free(ter_gpu);
     free(s_checker.pixels); s_checker.pixels = NULL;
     texture_cache_clear();
     if (font) font_free(font);
+    vehicle_free(veh);
     scene_free(scene);
 }
