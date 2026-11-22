@@ -1015,7 +1015,8 @@ the camera (camera_setup, 90° hFOV) and installs a per-frame callback in DAT_00
 the whole part tree, 0045a770), `[4]` = bounding RADIUS about that centre (√max vertex dist², 0045a5d0).
 
 **Track camera (00435330), per frame:**
-- targets: pitch −= axis×(π/180), clamped [1°, 90°]; yaw −= axis×(π/180), wrapped ±π (input axes
+- targets: pitch −= axis×(−π/180) (constant 0x004c2098 is negative, so the target grows with the axis),
+  clamped [1°, 90°]; yaw likewise, wrapped when |yaw| > 6283.19 (input axes
   005348c4 / 005348cc); distance = axis 005348bc clamped [1, 10]. Defaults pitch π/6, dist 5.5.
 - smoothing: s = 2·dt; if 0 ≤ s ≤ 0.95 and |target − current| ≥ 0.005, current += s·(target −
   current), else snap. Orientation: slerp (0049b7e0) of a stored quat toward the target entity's
@@ -1158,6 +1159,133 @@ Args (entity, &flags, &vel, &speed_out, &out3, &angvel, &matrix, dt). Seen so fa
   appear as stray local_19c/1a0/1a4/1ac stores). It must be re-read headless with helper
   prototypes fixed before transcribing.
 
+### Ground dynamics 004263a0 — transcription (2026-11-22, re-read with recovered params)
+Re-decompiled headless with callee parameters recovered in memory (DecompParamId.java; corpus in
+/home/roan/i76_decomp/phys_pid/). Symbols: M = model (entity+0x70), v = M+0xbc velocity, ω = M+0xc8
+angular velocity, s = |v| (M+0xac), 1/s = M+0xb0, F = entity 4x4 (+0x18), pos = entity doubles
++0x40/48/50, wheels W_FL.. = M+0x3ac/3a8/3bc/3b8 models (+0x0c μ, +0x14 tyre factor ???),
+n = ground normal M+0x464, g_n = M+0x470 = 9.8·n.y³, surf = surface table 005fb500[M+0x460].
+1. **Airborne test.** p' = ballistic(pos, v, −9.8, dt) (00423080). h = ground at p' (00423690).
+   If the car's bottom point (pos + F·(0, M+0x34, 0) when the car is upside-down, F[10] ≤ 0 ???)
+   is > 0.5 above h, or already airborne (flag 4) and rising (> M+0x474): **airborne**. F.pos = p',
+   v unchanged, |v| out, ω.x eased toward −π/20 (−0.157) by dt (00427b50), orientation integrated
+   by ω (00423440), flags = (flags & ~0x2202) | 4. Return.
+   Landing frame (flag 4 set, not rising): flags = (flags & ~4) | 0x200; flag 2 (skid) if the
+   landing direction·v ∉ [−1, 1] ???. Return.
+2. **Grounded.** throttle T = M+0xe4. "Flipped" = up·n < 0.1 (on its side/roof). T is forced to −1
+   (full brake) when flipped, when e_brake (M+0xf0) is held, or when engine state M+0x104 == 0. State M+0x104 == 2 and T > −1e−4 → T = 0. Reverse key held
+   (M+0xf4) with T < 0 → T × 2. Signed speed s± = s × sign(v·fwd). Skid flag when
+   s± × dir(M+0xe8) < −1 with T > 1e−4 (wrong-way throttle), or e_brake with s > 2 (≥ 0.1·s± blend).
+3. **Drive force** a_drive (004280c0): T > 1e−4 → engine(FUN_00453b80 on M+0x3c4) × M+0xa8 ×
+   M+0x128 (× 5 if flag 0x800), ÷ s when s > 1, floor 1e−4, × T; capped at rear μ·g_n/4·surf
+   (cap → wheelspin flag); × dir. T < −1e−4 (brake) → −brake(M+0x?? +0x10) × T × 8, against
+   −Σμ·g_n/4·surf (× ½ with e_brake); sign follows v·fwd.
+4. **Steering** (00428bd0) → yaw rate r: grip G = tyre × g_n × surf × Σμ × 0.25 (or Σμ × 7.84 if
+   flag 0x10000 clear); r = steer × s± × k (M+0x110) while s±²·k ≤ G, else steer × G / s±.
+   |r·s±| > 2G → sliding; G < |r·s±| ≤ 2G → grip fraction e = (|r s| − 2G)/(G − 2G).
+   Damaged front tyres pull steer by ±0.3 (random when both). steer clamped [−1, 1].
+5. **Drag + rolling** (s ≥ 1): a = (M+0x120 × s² × −0.1 − surf_roll(FUN_00497760) × Σtyre × g_n/4) / s
+   along v. Ground-normal gravity split via 0049afb0.
+6. **Friction limit:** |a| > Σμ × g_n/4 × surf → sliding. If sliding or flipped: per-wheel lateral
+   (rolling) or full-slip friction (00428710 × 4, or 00428600 for flag 0x1000) adds force + yaw torque.
+   Otherwise the velocity is re-aimed along the heading: v_new = fwd × s± (grip) or blended by e.
+7. **Integration:** pos += v·dt + ½·a·dt² (double), v += a·dt (00422f40 / inline); heading rotated
+   by −r·dt about Y (0049b0b0), then the frame is re-aligned to the ground (00427a40 / 00427b20 ???,
+   double-arg call garbled in the decompile: read via asm). Outputs: v, s±, accel, ω with ω.y = r.
+   Near-zero speed with brake/T < 0: v = 0, skid flags cleared.
+   Model: **kinematic heading + friction-limited velocity**, not a rigid body; rigid-body-like
+   friction forces only while sliding.
+
+### Ground contact query 00423690 (seen)
+ground(x, y, z) → height + normal. First the **drivable-object list** DAT_00523230: entity types **11–13**
+(FUN_00423550 registers them; type 12 only its type-13 parts) contribute every face of their **render mesh**
+(part+0x80 → face list) whose plane normal y > 0.4 (004c1c24). Each object has a bounding circle (FUN_00454240);
+a face counts if (x, z) is inside its polygon (FUN_00422870, crossing test on the face's vertex indices) and its
+height is −(a·x + c·z + d)/b (FUN_00422850, plane a,b,c,d at face +4..+0x10). Pick: the highest face within ±3
+of y (004c1c2c/30); else the highest face below y. Otherwise the **terrain**: height = terrain_height_sample
+(bilinear), normal = the **flat face normal of the heightfield triangle** under (x, z) (FUN_00495040): split on the
+(0,0)–(1,1) diagonal (tz ≤ tx → corners 00,10,11; else 00,01,11), n = normalize(−dX·s, 1, −dZ·s) ???sign,
+s = height scale/cell. So bridges are driven on via their own geometry; roads are just terrain.
+
+### Post-step 00429770 — wheel spin, settle and tilt (seen, structure)
+Args (entity, accel, flags, airborne, dt). Each wheel's spin (FUN_00466d40) from forward speed ± yaw·track
+(±0.008 × …, 004c1dc8). Wheel ground heights (00466e90 / 00466ea0 / 00466eb0); the body is lifted along the
+ground normal by the largest wheel penetration. A wheel hanging > 1e−4 above ground tips the body toward it:
+target angular rates ±π (roll) / ±π/2 (pitch) per corner (004c1dd0..1ddc), eased by 2·dt, rotating about the
+corner pivots M+0x48c[corner]. Body up = normal of the plane through the wheel contact points (0049bf90),
+matrix rebuilt keeping the heading (0049ba20). Constants 004c1dc0..1df4. Helpers not yet read: 00466d40,
+00466e90/ea0/eb0, 0045a370, 0049bf90, 0049ba20.
+
+### Engine + gearbox (seen: 00453330 init, 00453480 post-init, 00453700 update, 00453520 / 004534a0 shift logic)
+Engine = child entity class 21 at M+0x3c4, model E (0x30 B): +0x00 HP, +0x04 max HP (300), +0x08 gear,
++0x0c k, +0x10 **torque out**, +0x14 **P** (default 300000; ENGN record), +0x18 health (1.0), +0x1c **rpm**
+(1050), +0x20 7000, +0x24 speedometer, +0x28 engine index.
+- **Torque** = (P − k·(rpm − 3500)²) × health, k = P × 8.163266e−8 = P/3500² → P·(1 − ((rpm−3500)/3500)²)·health:
+  0 at 0 and 7000 rpm, peak P at 3500. Health = HP/maxHP, floor 0.4 (0.275 for one case ???) (00453390).
+- **Gears:** 0 reverse (ratio 3.0), 1 idle/stopped (rpm 1050), 2/3/4 = 1st/2nd/3rd (1.67 / 0.96 / 0.67) (table
+  0x004f9928). Wheel rpm w = |v| × 0.5973836 × 60; rpm = ratio × w × 3.538 + 850 (final drive 3.538). Free rev
+  (no gear): rpm = T × 4950 + 1050, cap 6000. rpm eased by 2·dt (same ease, gap 0.005). Speedometer = w × 1.674
+  × (1/60) × 2.2369 (mph).
+- **Automatic shifting:** hard-coded throttle (T) / speed (×3.6 = km/h) thresholds: 1→2 when T > 0.002; up/down
+  windows per gear from constants 0x004c4764..47b8 (e.g. 2→3 between 25 and 62 km/h depending on T;
+  3→4 between 40 and 106; downshifts 3→2 below 12..60, 4→3 below 31..98, 2→1 when T < 0.002 and < 0.5 km/h).
+  Exact window shapes: 00453700 + 00453520 (transcribe verbatim).
+- **Selector** M+0x104 (shift_up/down clamp 0..5): **0 P, 1 R, 2 N, 3 D, 4 "2", 5 "1"** (5 caps gear at 2nd,
+  4 at 3rd; R sets direction M+0xe8 = −1; N gives no drive; P forces full brake). Spawn default 3 (D).
+
+### Vehicle parameters — where each comes from (seen: 004b8660 VCFC, 004bba10 compnent apply, 004b8bf0 VDFC,
+### 00461fb0 model defaults, 00461db0 / 0044dda0 / 00452e20 component defaults)
+- **Engine ID → record:** the VCFC engine value is an ENGINE NUMBER looked up in **engsnd.dat** (text, read by
+  audio_load_dat 00452ee0 into table 0x00546780, 0x60 B/entry; FUN_004532f0): columns ENG NUM, ENG COMP ID (=
+  ENGN record index), REVABLE flag, engine / horn / ignition sounds + times. 0-3 map to records 0-3, 4 (tank) → 0,
+  5 (Marx) → 3, 10 → 3, 20/41/50/51/99 = helicopter / balloon / UFO / none. E+0x28 = engine number, E+0x2c = table row.
+- **.vcf VCFC** (in-game handler 004b8660; payload = chunk + 8): +0x2a engine number (via engsnd.dat), +0x2e suspension index,
+  +0x32 brake index; +0x5d.. 8 × i32 armor (800 each, Stag) → M+0x138.. / +0x158.. / +0x178.. (+0x188 = +0x19c
+  = 100). Then compnent.cdf is parsed with table **0x005056b8** (handler 004bba10) — the garage uses a
+  different table (0x00505788, display only).
+- **compnent.cdf records → components:** ENGN {HP, P, weight}: E.HP = E.maxHP, E+0x14 = P, mass += weight.
+  BRAK {HP, factor, weight}: brake model (class 22, M+0x3cc) +0x04/+0x08 HP, **+0x0c factor** (1.0..2.0),
+  +0x14 index, mass += weight. SUSP {HP, grip, a, weight}: suspension model (class 23, M+0x3c8) +0x00/+0x04
+  HP, +0x08 index, **+0x14 = +0x18 = grip** (1.0..2.0; scales the steering grip G), +0x1c = (100 − a) × 0.01,
+  mass += weight. Damage (00461df0): +0x0c = 5 − (5 − +0x10)·hp/max, +0x14 = (+0x18 − 0.5)·hp/max + 0.5;
+  destroyed → 5.0 / 0.5. Chassis (class 20, M+0x3c0): HP 400.
+- **.vdf VDFC** (004b8bf0): payload +0x14 class (1), +0x18 → M+0x480 (4 on the Stag, wheel count ???),
+  +0x1c..+0x2c five values → loader context (70, 45, 30, 25, 100000 on the Stag; role ???), **+0x30 → M+0xa4
+  base mass** (Stag 1925), +0x34 → M+0x124 (1.0), **+0x38 → M+0x120 drag coefficient** (0.0008), +0x3c →
+  +0xa5c (5), +0x40 cockpit name. **Mass = VDFC base + engine + brake + suspension weights.** COLP: 12 floats
+  → loader context (collision params, role ???).
+- **Model defaults (00461fb0):** **M+0x110 = 0.2 steering factor k**, +0x114 = 1.37, +0x118 = 2.74, **+0x128 =
+  1.0** (drive scale), +0x104 = 3 (D), +0x30 = 2, +0x34 = 1.5, local box corners ±1/±2, +0x460 surface 2,
+  +0x468 = 1 (normal y), +0x470 = 9.8, +0x47c = 0.1.
+- **Vehicle physics init 004246c0** (called from class init 004622a0; seen): place on ground (00423690);
+  each wheel's ground height → wheel +0x2c/+0x30 (00466bc0); **M+0x114 track = |FL−FR|, M+0x118 wheelbase L =
+  |FL−RL|, M+0x110 = 1/(2L) (steering factor, replaces the 0.2 default), M+0x11c = rear wheel local z (yaw
+  pivot = rear axle)**, M+0x47c = 0.1; M+0x00 collision object (00454070), M+0x04..0x34 body box corners from its
+  bbox (y = mid-height); corner pivot table M+0x48c.. = (±L/2, ±track/2); special item type 3 → M+0x128 = 1.25;
+  flags |= **0x1001** (all vehicles); **0x10000 for the player** only (full grip formula; AI uses Σμ × 7.84);
+  M+0x460 = surface at spawn; **FUN_00422d90(&M+0xa4, mass, mass): M+0xa8 = 1/mass** (mass > 1e−4), M+0xb4 =
+  mass, M+0xb8 = 1; then **M+0xb4 = 2.65618 / L** (yaw ease rate); chassis gets M+0xa8 × 2300 (0044de80 ???);
+  engine primed (00453700). The earlier store scan missed M+0xa8 because it is written through &M+0xa4.
+- **Wheel slots (WLOC → .wdf loader 004b92f0):** front M+0x3a8/0x3ac, middle M+0x3b0/0x3b4 (6-wheelers),
+  rear M+0x3b8/0x3bc. Rear wheels carry the drive traction → **rear-wheel drive**. Wheel = class 30 entity,
+  model (00466890, 0x88 B): +0x04/0x08 HP (100), **+0x0c μ** (WDFC payload +0x30; "13in Stock" = 1.0), +0x10 /
+  +0x14 / +0x18 = 1.0 (+0x14 = rolling-resistance factor ???), **+0x1c radius** = wheel local y (default 0.566),
+  +0x2c/+0x30 ground height, +0x38/+0x3c = ±radius × k. WDFC payload +0x28 HP, +0x2c weight (mass += 2 ×).
+
+### Surfaces (seen: 00497790, 00497750..80, WRLD handler)
+Surface type = terrain cell word >> 13 (3 bits, 8 types); 5 outside the map. Table 005fb500 = 8 × {f grip,
+f rolling, f ???, f ???, i effect} copied from the mission's **WRLD +0x9f** (same base as the hour at +0x9b).
+N01: types 0/3/7 {1.9, 0.03}, 1 {1.5, 0.1, effect 3}, 2/6 {2.1, 0.01}, 4 {1.5, 0.08}, 5 {1.5, 0.2, effect 12}.
+Grip getter returns 0 when the value > 0.2 and model flag 0x400 ???. The effect integer scales the bump
+jolt 00463370 (applied above 7.65 m/s, 00424da0).
+
+### Slide friction 00428600 (all vehicles, flag 0x1000; seen)
+a += −((v · right) / |v|) × G_total × right (right = body matrix row 0): only the sideways part of the
+velocity is resisted while sliding. (00428710, per-wheel friction with yaw torque, runs only without 0x1000.)
+Helpers: 0049afb0 = split a vector into parts along / across a normal; 00423440 = orientation update
+F' = R(−ω·dt) × F (0049b170 builds R ???order); 00422f40 = pos += v·dt + ½·a·dt² (pos as double, but the sum is
+done in float), v += a·dt; 00427a40 = double out = p + d·s.
+
 ### Data
 - compnent.cdf (BWD2, seen + parsed): NTBL/BTBL/STBL name tables (4 each) + ENGN/BRAK/SUSP
   records, 26/26/30 B, copied whole by FUN_004bbb80. ENGN {i32 300, f32 104400..290900, f32
@@ -1167,10 +1295,39 @@ Args (entity, &flags, &vel, &speed_out, &out3, &angvel, &matrix, dt). Seen so fa
 - Vehicle physics parameters also come from the .vdf (VDFC → model fields, COLP 12 dwords) and the
   .vcf; mapping ???.
 
+### World handedness (2026-11-22)
+The original world is **left-handed**: x right, y up, z forward (0049ba20 builds right = up × fwd; WLOC
+"right" wheels sit at +x). Our right-handed view matrix showed the whole world mirrored until the
+world viewer mirrored clip x (proj[0] = −proj[0]); its free-fly / orbit controls use right = up × fwd.
+sceneview now uses the left-handed basis too; meshview's orthographic view was already correct.
+Audit of coordinate decisions made in the mirrored world (2026-11-22): object/part 3×3 transpose = the
+row-vector convention (and the bridge check compared against equally-mirrored roads) ✓; mesh normals
+(inward/outward is geometric) ✓; sun vector (from code) ✓; skins / wheel sets (by name) ✓; WLOC order —
+every wheeled vehicle's WLOC matrix is identity (±0.001), order irrelevant ✓; track camera — Ry/Rx are the
+exact column-vector transposes of the camera's own rotations and the `+=` input sign is right (multiplier
+0x004c2098 = −π/180) ✓. Nothing else was tuned by eye.
+
+### Implemented: src/engine/vehsim.c (2026-11-22)
+Transcription of the chain above, used by the world viewer's drive mode. Notes from building it:
+- **Brake strength:** the physics reads brake model +0x10, which only the class init sets (1.0); the BRAK
+  factor goes to +0x0c and the brake damage handler (class 22, 0044ddd0) is empty. So the BRAK upgrade
+  changes only mass in the original. Implemented as such.
+- **Terrain normal sign:** FUN_00495040 decompiles as n = (+dX, 1, +dZ); with that sign slopes accelerate
+  cars uphill. vehsim uses (−dX, 1, −dZ) (headless test: rolls downhill at ≈ g sin θ). Verify in-game ???.
+- **Ignition time:** M+0x454 comes from FUN_0041d920 (unread); engsnd.dat's normal ignition time is used ???.
+- **Upside-down auto-flip** (00429530): player only, single-player, at rest roof-down.
+- Not yet: drivable objects in the ground query, landing response 004a76f0 (falls > 35 destroy), bump jolt
+  00463370, damage, the scripted/target-follow branch (model+0x38, FUN_0041ecb0), distant-vehicle sim 00426190.
+- Headless check (Stag, flat, full throttle): wheelspin off the line, 1→2 at ≈43 mph, 2→3 at ≈68 mph,
+  110 mph at 20 s; mass 2298.
+
 ### Next
-Read headless, with prototypes: 004263a0, the per-wheel 00428710, 004280c0, 00428bd0, 00422f40,
-00429770, 00423690, 00423440. Then map VDFC / COLP / compnent fields to model offsets, find
-where the engine torque curve and gearing live, and transcribe.
+Base vehicle physics is mapped (sections above). Before transcribing to code, read the remaining small
+helpers verbatim: 00466d40 (wheel spin), 0049bf90 / 0049ba20 (contact plane + matrix rebuild), 0049b170
+(rotation order), 00463370 (bump jolt), 00426190 (simplified sim for distant/remote vehicles), the exact
+shift windows of 00453700 / 00453520, and the throttle/steer ramp constants 004c2188..21d4 (0043ebf0).
+Collision side (later): COLP 12 floats, VDFC context values (70, 45, 30, 25, 100000), narrow phase 0041fcc0,
+response 004987f0 / 004a76f0. Corpus with recovered parameters: /home/roan/i76_decomp/phys_pid/.
 
 ## game_session_run — Structure
 
