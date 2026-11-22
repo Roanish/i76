@@ -568,17 +568,20 @@ block **verbatim** into a `0x2c`-header + `n*24`-byte node, and links them into 
 `DAT_005e5008` (block: `[0]` id from `g`-counter `DAT_005e500c`, `[1]/[2]` next/prev, `[3]` flag (1 on
 last), `[4]` id, `[5]` rib count, `[10]` → rib data). It does **not** reinterpret the rib fields.
 
-**RSEG on-disk:** `[u32 ?=1][u32 count][ count × 24-byte ribs ]`. Each **24-byte rib** is a road
-cross-section in the XZ plane (no Y — roads drape on terrain):
+**RSEG on-disk:** `[u32 road type][u32 count][ count × 24-byte ribs ]` (type % 3 = texture set;
+RSEG_loader 004b4370, seen headless: quads split into blocks of `per` = count−1 halved rounding up
+until ≤ 24, full blocks while > 4 quads remain, then a last block if it has > 1 quad; block[4] =
+type, block[5] = rib count). Each **24-byte rib** is a road
+cross-section: two edge points (Y comes from the terrain):
 
-| off | type | role (from data; N01) |
+| off | type | role (roads_drape_to_terrain 00493cc0, seen) |
 |----|----|----|
 | +0x00 | f32 | edge-A X |
-| +0x04 | f32 | edge-A Z |
-| +0x08 | f32 | edge-B Z |
+| +0x04 | f32 | edge-A Y (file value unused: set to terrain height at load) |
+| +0x08 | f32 | edge-A Z |
 | +0x0c | f32 | edge-B X |
-| +0x10 | i32 | flag/index (0/36, occasionally a float) — unconfirmed |
-| +0x14 | f32 | a third Z (≈ edge-A Z − 5) — unconfirmed |
+| +0x10 | f32 | edge-B Y (likewise) |
+| +0x14 | f32 | edge-B Z |
 
 Consecutive ribs form the road ribbon (quad strip). N01 = 394 ribs tracing a closed loop over the
 bunker/bridge area. `scene.c load_roads` + `worldview.c build_road_verts` render it (draped on terrain).
@@ -1056,6 +1059,118 @@ keyboard driver (vtable 004f7628: init 00442810, poll 00442a50 via PeekMessage W
   PRESET_VIEW_1,2,3,12,11,4,6,7,8,10,5 (stock file). Key handler 0043e2c0 → camera_set_view(id).
   Gamekey key-name table not reversed ??? (we accept characters + common key names).
 - Implemented: src/engine/keybind.c (+ generated keybind_tables.c), trackcam.c.
+
+## Frame timer + road height (2026-11-22)
+
+**timer_tick (004a2d40), body seen.** dt (DAT_00503fd0, read by FUN_004a2cd0) =
+GetTickCount() × 0.001 minus last frame's; single-player clamps it to **[0.001, 0.2] s**
+(004c518c / 004c5190). Seeded 0.06 s at init (FUN_004a2c10, 004c517c). Paused (g_input_mode &
+0x3e, not multiplayer) → dt 0. **No frame limiter anywhere** (no Sleep / vsync wait; the only
+timeGetTime users are the perf_marker profiler). So the original ran uncapped with variable dt, and
+everything it does per frame rather than per dt ran at whatever speed the PC managed.
+Consequences found so far:
+- Track camera pitch/yaw step π/180 × axis **per frame** → turn speed ∝ fps.
+- Analog stepper (00441110): a = ftol(dt × 182) → **a = 0 above ~182 fps**: keyboard-driven axes
+  stop moving entirely. Non-delta axes add vel to the value per frame → ramp speed ∝ fps too.
+- Camera easing (s = 2·dt) and the quat slerp are dt-scaled (linear form of e^(−2t)), so they
+  are already near fps-independent at normal rates.
+
+**Road height.** roads_drape_to_terrain (00493cc0) sets each rib's edge-A Y (+0x04) and edge-B Y
+(+0x10) to terrain_height_sample(x, z) with **no offset**, so roads have no height of their own
+and the car drives on the terrain. The road draw (FUN_00494420) emits each rib quad flat, depth-
+sorted by its min z (FUN_00498dc0). FUN_00494220 = nearest road rib to (x, z) (up to 8 closest
+segment centres, then the nearest rib); its callers are AI/pathing ???, not collision.
+Visibility: the terrain renderer FUN_004959d0 submits its polygons (via 004972d0 / 00497490) to
+the SAME z-bucketed painter's list as the roads (FUN_00498dc0, up to 0x1000 depth buckets). The road
+quad's key is its NEAREST vertex, so it tends to land after (on top of) the terrain beneath it.
+No depth-buffer contest and no texture mask: roads are separate textured polygons. The road textures
+come from a name list (30 × 16 chars into DAT_005a65a0, fatal "Road texture not found"), and each
+quad picks texture ROAD_SET[road type % 3][(quad-in-block % 10) + (centre depth < 60 ? 0 : 10)]
+(table 0x005006a0; quads beyond depth 450 skipped). Corner UVs B_i (0,0), A_i (1,0), A_i+1 (1,1),
+B_i+1 (0,1): one texture repeat per quad. Lit as flat-up: intensity × L.y × haze + ambient
+(DAT_00617ff0..f8 = light vector). Optional per-mission override list "<mission>.rtm".
+Ours: road Y from the rendered terrain triangles, subdivided at half-cell, drawn depth-biased
+(render_3d_draw_decal); the old 0.6 lift was ours, not the original's.
+
+## Vehicle physics — map (2026-11-22, IN PROGRESS)
+
+Goal: a faithful transcription of the original vehicle simulation. This section is the map;
+per-function detail is added as each body is transcribed. "seen" = body read; everything else
+is marked ???.
+
+### Frame order (Fun_Real_Entry main loop, seen)
+`timer_tick` → `input_poll` → **`game_tick` (0041fad0)** = collision broad phase → `game_tick2`
+(0043e150) = commands + **player controls (0043ebf0)** → **class pass 1 (0044f9c0)** → … →
+**class pass 2 (0044fa90)** → … → camera callback (DAT_004f36b8) → render.
+
+- **game_tick (seen):** for each mover in list DAT_00523224, builds a world AABB swept by
+  velocity × dt (FUN_004a2bc0 = sim dt DAT_00503fc8), padded by the bounding radius (entity+0x10);
+  tests every pair of movers, then each mover against list DAT_00523228 (statics), via FUN_0041fcc0;
+  a hit with DAT_00523218 && DAT_0052322c → FUN_004987f0 ???. Narrow phase not read yet.
+- **Class dispatch (seen):** table "clasfn" 0x004f7f08, 29 × 52 B {type, fn[12]}, keyed by entity
+  type (+0x6c). Pass 1 calls fn slot +0x0c, pass 2 slot +0x10. **Type 1 = vehicle:** create
+  00461f10, +0x08 004622a0 (in an export gap ???), **pass 1 = 00462980**, **pass 2 = 00462ad0**,
+  others 004634f0 / 00463530 / 00463550 / 00462c00 / 00462b00 / 00462b20 (unread).
+
+### Player controls → vehicle model (0043ebf0, seen)
+Model struct = entity+0x70 (FUN_00466640). Analog axes (−1..1) × 004c21b4: **+0xe4 throttle**,
+**+0xe0 steer**; digital throttle_up/down and steer_left/right ramp a hold timer to 3 s
+(005340a0..ac). The steer ramp is √(t·k), so steering grows with the root of the hold time.
+Clamped to ±0.9999. **+0xe8 = drive direction ±1** (from gear FUN_00466560; reverse_direction
+toggles it), **+0xec start_engine**, **+0xf0 e_brake**, **+0x100 lights**, shift_up/down →
+FUN_00466590 / 004665b0. Constants 004c2188..21d4 not dumped yet ???.
+
+### Sub-stepping (seen: 00462980, 004a3000/3040/30c0, asm of 004a3040)
+Vehicle pass 1: if the vehicle is far/remote (FUN_004359c0(e, 25.0) == 2, ???) or flag 0x20:
+one step with the frame dt (00464530 + 00426190 simplified sim ???). Otherwise **sub-steps**:
+accumulator at model+0x448 = {rate, step, count}; init rate = 1/0.05 = **20 Hz** (FUN_004a3000).
+Per frame **n = ftol(dt × 20) + 1, capped 20; step = dt / n** (table 005b22e8[i] = 1/(i+1)).
+For each step: **00464530** (vehicle state machine: engine start / death / respawn timers,
+seen) then **00424da0** (dynamics driver). So the physics step is ≤ 1/20 s, variable. At ≥ 20 fps
+it is one step per frame of dt.
+
+### Dynamics driver 00424da0 (seen, structure only)
+- Velocity **+0xbc/c0/c4** (world, linear), angular velocity **+0xc8/cc/d0**, speed **+0xac** =
+  |v|, **+0xb0 = 1/speed** (1e30 below 1e-4). Wheels = child entities at model **+0x3a8, +0x3ac,
+  +0x3b8, +0x3bc** (+ optional +0x3b0/+0x3b4: 6-wheel vehicles); their model+0x20 = spin speed
+  (FUN_00466c20).
+- Airborne / special branch (model+0x38 == 0 && FUN_0041ecb0 ??? or flag 0x10): steering-like
+  force toward a target (+0x3c = target entity ???), angular velocity clamped to ±π/2 (x),
+  ±π (y), ±π/4 (z) (004c1d28..1d3c), then position += v·dt and orientation integrated by
+  FUN_00423440(matrix, ω, dt).
+- Main path: **FUN_004263a0 = ground vehicle dynamics** (below), then FUN_00423690 = terrain
+  sample at the position (height + normal → model+0x464..0x46c, height → +0x478); **+0x470 =
+  n.y³ × 9.8** (gravity component normal to the ground ???); FUN_00429770 (3.4 KB, unread)
+  applies the result; wheel spins; FUN_00453700 = engine sound (throttle, speed).
+
+### Ground dynamics 004263a0 (5.8 KB, partially read)
+Args (entity, &flags, &vel, &speed_out, &out3, &angvel, &matrix, dt). Seen so far:
+- Ballistic predict FUN_00423080(pos, vel, −9.8, dt): pos += v·dt (y: v.y·dt − 4.9·dt²),
+  v.y += −9.8·dt. If the predicted point is > 0.5 above the ground (004c1cf0), or already
+  airborne (flag 4) and still rising, the car is airborne (flags |= 4) and it returns.
+- Grounded: drag term ∝ model+0x120 × speed² × (−0.1) minus rolling resistance = Σ(4 wheels'
+  +0x14) × surface friction (material table 005fb500, 20 B/entry, FUN_00497760) × (+0x470 × 0.25).
+- Per-wheel force calls: FUN_00428710 × 4 (1.2 KB each, unread) or FUN_00428600 when flag
+  0x1000 ???; FUN_004280c0 / 00428bd0 / 00422f40 unread.
+- Integration: semi-implicit with ½·a·dt² (double 0.5 at 004c1d70); ease FUN_00427b50 is the
+  same as the camera's (s ∈ [0, 0.95], snap gap 0.005).
+- **The export decompile of this function drops the stack-passed call arguments** (they
+  appear as stray local_19c/1a0/1a4/1ac stores). It must be re-read headless with helper
+  prototypes fixed before transcribing.
+
+### Data
+- compnent.cdf (BWD2, seen + parsed): NTBL/BTBL/STBL name tables (4 each) + ENGN/BRAK/SUSP
+  records, 26/26/30 B, copied whole by FUN_004bbb80. ENGN {i32 300, f32 104400..290900, f32
+  200/230/275/340, "eng0N"}; BRAK {150, 1.0..2.0, 12..20, "brk0N"}; SUSP {200, 1.0..2.0,
+  0..45, 35..46, "sus0N"}. Field meanings ??? (first int = component HP ???). Loaded per
+  vehicle by FUN_004bbd20(index, kind, out[0x2c]).
+- Vehicle physics parameters also come from the .vdf (VDFC → model fields, COLP 12 dwords) and the
+  .vcf; mapping ???.
+
+### Next
+Read headless, with prototypes: 004263a0, the per-wheel 00428710, 004280c0, 00428bd0, 00422f40,
+00429770, 00423690, 00423440. Then map VDFC / COLP / compnent fields to model offsets, find
+where the engine torque curve and gearing live, and transcribe.
 
 ## game_session_run — Structure
 
