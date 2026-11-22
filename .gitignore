@@ -26,6 +26,9 @@ miss16/
 smk/
 addon/
 upscale/
+# Original key-binding config (read from the asset root at runtime)
+/input.map
+/gamekey.map
 
 # Research notes — exclude extracted game files and screenshots
 lib/Notes/hoppers guide/files/

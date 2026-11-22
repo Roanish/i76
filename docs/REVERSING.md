@@ -978,6 +978,39 @@ purpose (the original's 150 + fog is a fidelity feature for later).
 
 ---
 
+## Input bindings — input.map / gamekey.map (2026-11-22)
+
+Bodies seen: input.map parser 00440620 + chord 004403f0, key-name→channel 0043fd20, device
+enumerate 0043f9f0, analog sink build 0043fe30 / channel create 00440230, **analog sink stepper
+00441110 (Ghidra currently mislabels it `lzo_init` — wrong rename)**, input_poll 00441370,
+keyboard driver (vtable 004f7628: init 00442810, poll 00442a50 via PeekMessage WM_KEY*, state
+00442db0, char queue 00442a00), frame dt 004a2cd0 (= DAT_00503fd0 ???).
+
+- Files read: **input.map** (held actions) and **gamekey.map** (commands). keyboard.map /
+  input.def / joystick.map are never referenced by nitro.exe (shell defaults ???).
+- input.map: `action {` then lines `%1[+-] device key` until `}`; one block = one chord (≤ 8
+  terms, all `+` held and all `-` released); several blocks OR. Unknown action = fatal.
+- Keyboard channels: 125 names (table 0x004f70c8, localisable), **channel = set-1 scancode − 1**;
+  extended (E0) keys remapped via 0x004f74c0 → 93..102 = Grey{Home,UpArrow,PageUp,LeftArrow,
+  RightArrow,End,DownArrow,PageDown,Insert,Delete}. Plain UpArrow/PageUp/Home/Insert/… are the
+  **numeric keypad**; "Grey…" = the dedicated cursor block. Virtual 118 "Shift" / 119 "Control"
+  = either side (from 0x2a/0x36, 0x1d/0x70).
+- Action table 0x004f3d10, 86 × 32 B: {name, var, type (0 axis, 1 button, 2 toggle), default,
+  min, max, rate, flags(output shift)}. Binding `X_plus` / `X_minus` creates an analog channel for
+  axis X (or X_delta) driven by those buttons.
+- Sink (0043fe30): 16.16 value v ∈ [−1,1], init `((default<<16)−(min<<16))·2/range − 1.0`;
+  "_delta" sinks alias the velocity pointer onto the value.
+- Stepper (00441110), per frame with a = ftol(dt × 182.0) (0x004c21f0): plus held → vel = max(vel,0)
+  + (3a << rate), cap 0x5555, v += vel, cap 1.0; minus mirrored; neither → vel = 0. (Aliased:
+  v doubles each frame → steady ≈0.667, snaps to 0 on release.)
+- Output (input_poll): `(((v+1.0)·range)/2 + (min<<16)) >> shift`. track_distance (default 4,
+  1..10) therefore starts at **3** (3.99998 truncated) → the stock external camera starts at
+  3 × radius (camera init's 5.5 is overwritten on the first frame).
+- gamekey.map: `COMMAND [Control+|ALT+|Shift+]key`; commands from 0x004f47d0; F1..F11 →
+  PRESET_VIEW_1,2,3,12,11,4,6,7,8,10,5 (stock file). Key handler 0043e2c0 → camera_set_view(id).
+  Gamekey key-name table not reversed ??? (we accept characters + common key names).
+- Implemented: src/engine/keybind.c (+ generated keybind_tables.c), trackcam.c.
+
 ## game_session_run — Structure
 
 CONFIRMED by: full decompilation of `game_session_run` (FUN_00430eb0).
