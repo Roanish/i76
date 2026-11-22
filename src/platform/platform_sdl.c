@@ -115,6 +115,7 @@ bool platform_pump_events(PlatformEvent *evt)
 {
     evt->type = PLATFORM_EVENT_NONE;
     evt->key  = PK_UNKNOWN;
+    evt->hid  = 0;
 
     /* Quit is sticky: once the window was closed, every later pump reports it,
      * so a consumer that swallows the event (a video skip, a queue flush)
@@ -143,11 +144,15 @@ bool platform_pump_events(PlatformEvent *evt)
         case SDL_KEYDOWN:
             evt->type = PLATFORM_EVENT_KEY_DOWN;
             evt->key  = translate_key(sdl_evt.key.keysym.sym);
+            /* SDL scancodes are USB-HID usage ids. */
+            evt->hid  = (uint16_t)sdl_evt.key.keysym.scancode;
             return true;
 
         case SDL_KEYUP:
             evt->type = PLATFORM_EVENT_KEY_UP;
             evt->key  = translate_key(sdl_evt.key.keysym.sym);
+            /* SDL scancodes are USB-HID usage ids. */
+            evt->hid  = (uint16_t)sdl_evt.key.keysym.scancode;
             return true;
 
         case SDL_MOUSEBUTTONDOWN:

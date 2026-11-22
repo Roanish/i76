@@ -64,9 +64,12 @@ void input_poll(InputState *out);
  * Like input_poll() it drains the event queue, so a frame uses ONE of the two,
  * not both. Held state persists in separate file-static storage.
  */
+#define INPUT_HID_KEYS 256   /* USB-HID keyboard usages (0x04..0xE7) */
 typedef struct {
     bool held[PK_COUNT];
     bool pressed[PK_COUNT];
+    bool hid_held[INPUT_HID_KEYS];      /* by physical key (key bindings) */
+    bool hid_pressed[INPUT_HID_KEYS];
     bool quit;
 } RawInputState;
 

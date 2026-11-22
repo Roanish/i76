@@ -82,9 +82,12 @@ void input_poll(InputState *out)
 static bool s_raw_held[PK_COUNT];
 static bool s_raw_prev[PK_COUNT];
 
+static bool s_hid_held[INPUT_HID_KEYS], s_hid_prev[INPUT_HID_KEYS];
+
 void input_poll_raw(RawInputState *out)
 {
     memcpy(s_raw_prev, s_raw_held, sizeof(s_raw_held));
+    memcpy(s_hid_prev, s_hid_held, sizeof(s_hid_held));
 
     bool quit = false;
     for (;;) {
@@ -99,11 +102,19 @@ void input_poll_raw(RawInputState *out)
             if (e.type == PLATFORM_EVENT_KEY_DOWN)    s_raw_held[e.key] = true;
             else if (e.type == PLATFORM_EVENT_KEY_UP) s_raw_held[e.key] = false;
         }
+        if (e.hid > 0 && e.hid < INPUT_HID_KEYS) {
+            if (e.type == PLATFORM_EVENT_KEY_DOWN)    s_hid_held[e.hid] = true;
+            else if (e.type == PLATFORM_EVENT_KEY_UP) s_hid_held[e.hid] = false;
+        }
     }
 
     for (int i = 0; i < PK_COUNT; i++) {
         out->held[i]    = s_raw_held[i];
         out->pressed[i] = s_raw_held[i] && !s_raw_prev[i];
+    }
+    for (int i = 0; i < INPUT_HID_KEYS; i++) {
+        out->hid_held[i]    = s_hid_held[i];
+        out->hid_pressed[i] = s_hid_held[i] && !s_hid_prev[i];
     }
     out->quit = quit;
 }

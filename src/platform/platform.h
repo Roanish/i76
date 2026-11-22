@@ -76,6 +76,8 @@ typedef enum {
 typedef struct {
     PlatformEventType type;
     PlatformKey       key;      /* PK_UNKNOWN for keys we don't translate */
+    uint16_t          hid;      /* physical key as a USB-HID usage id (0 = none);
+                                 * layout-independent, used by key bindings   */
 } PlatformEvent;
 
 /* ------------------------------------------------------------------ */
