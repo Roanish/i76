@@ -294,10 +294,12 @@ static void load_terrain(Scene *s, const uint8_t *d, long sz, const char *missio
         p->cell = FINE_CELL;
         p->zone = zi;
         p->heights = malloc(ZONE_DIM * ZONE_DIM * sizeof(uint16_t));
+        p->surface = malloc(ZONE_DIM * ZONE_DIM);
         const uint8_t *slab = ter + (size_t)zi * ZONE_BYTES;
         for (int i = 0; i < ZONE_DIM * ZONE_DIM; i++) {
             /* visible height = low 12 bits of the u16 cell; byte1>>4 = material */
             p->heights[i] = (uint16_t)(((slab[i*2+1] & 0x0F) << 8) | slab[i*2]);
+            p->surface[i] = (uint8_t)(slab[i*2+1] >> 5);
         }
     }
     free(ter);
@@ -327,6 +329,17 @@ static void load_world_textures(Scene *s, const uint8_t *d, long sz)
     /* +0x9b: hour of day -> sky_light_init (FUN_0046f5d0), see
      * docs/REVERSING.md "Time of day + global lighting". */
     if (wrld + 0x9b + 4 <= sz) s->hour = (int)rd_u32(d + wrld + 0x9b);
+    if (wrld + 0x9f + 8 * 20 <= sz) {
+        for (int i = 0; i < 8; i++) {
+            const uint8_t *e = d + wrld + 0x9f + i * 20;
+            s->surf_grip[i]   = rd_f32(e + 0);
+            s->surf_roll[i]   = rd_f32(e + 4);
+            s->surf_bump[i]   = rd_f32(e + 8);
+            s->surf_f3[i]     = rd_f32(e + 12);
+            s->surf_effect[i] = (int)rd_u32(e + 16);
+        }
+        s->have_surfaces = 1;
+    }
     fprintf(stderr, "[scene] world: palette '%s', lum '%s', ground '%s', sky '%s', hour %d\n",
             s->palette_name, s->lum_name, s->ground_tex, s->sky_tex, s->hour);
 }
@@ -506,8 +519,10 @@ void scene_free(Scene *s)
     if (!s) return;
     for (int i = 0; i < s->count; i++)
         if (s->items[i].mesh) geo_cache_release((void *)s->items[i].mesh);
-    for (int i = 0; i < s->patch_count; i++)
+    for (int i = 0; i < s->patch_count; i++) {
         free(s->patches[i].heights);
+        free(s->patches[i].surface);
+    }
     free(s->patches);
     free(s->road);
     free(s->road_segs);

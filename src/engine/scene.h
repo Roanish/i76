@@ -42,6 +42,7 @@ typedef struct {
     int       dim;         /* cells per side (128)                          */
     float     cell;        /* world units per fine cell (5.0)               */
     uint16_t *heights;     /* dim*dim 12-bit heights ((b1&0xF)<<8 | b0)      */
+    uint8_t  *surface;     /* dim*dim surface type (0..7)                    */
     int       zone;
 } TerrainPatch;
 
@@ -77,6 +78,10 @@ typedef struct {
     char          lum_name[16];      /* e.g. "t15.LUM" (32-row shade table)    */
     char          sky_tex[16];       /* e.g. "nk_1cld2.map" (cloud texture)    */
     int           hour;              /* WRLD +0x9b time of day 0..23 (-1 = none) */
+    /* Surface table: grip, rolling resistance, bump per surface type. */
+    float         surf_grip[8], surf_roll[8], surf_bump[8], surf_f3[8];
+    int           surf_effect[8];
+    int           have_surfaces;
 } Scene;
 
 /* Load a mission file (path relative to the asset root, e.g. "miss8/N01.CBT").
