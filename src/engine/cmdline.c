@@ -29,6 +29,8 @@ void cmdline_parse(int argc, char *argv[], CmdlineArgs *out)
             strncpy(out->mods_root, argv[++i], sizeof(out->mods_root) - 1);
         } else if (strcmp(arg, "--no-mods") == 0) {
             out->no_mods = true;
+        } else if (strcmp(arg, "--legacy") == 0) {
+            out->legacy = true;
         } else if (arg[0] == '-') {
             /*
              * Original flags — exact strings not yet reversed from cmdline.

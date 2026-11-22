@@ -27,6 +27,7 @@
 #include <time.h>
 
 #include "platform/platform.h"
+#include "engine/fidelity.h"
 #include "engine/gamestate.h"
 #include "engine/cmdline.h"
 #include "engine/fs.h"
@@ -128,6 +129,8 @@ int main(int argc, char *argv[])
     /* -------------------------------------------------------------- */
 
     if (!args.no_mods) mods_init(args.mods_root);
+    fidelity_set_legacy(args.legacy);
+    if (args.legacy) fprintf(stdout, "[main] --legacy: faithful paths for all deviations\n");
     else fprintf(stdout, "[mods] disabled (--no-mods)\n");
 
     /* -------------------------------------------------------------- */

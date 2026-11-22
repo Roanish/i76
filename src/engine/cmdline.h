@@ -28,6 +28,7 @@ typedef struct {
     char     asset_root[512]; /* --assets <path> — game asset directory */
     char     mods_root[528];  /* --mods <path> (default <asset_root>/mods); "" = --no-mods */
     bool     no_mods;         /* --no-mods: run on the original assets only */
+    bool     legacy;          /* --legacy: faithful path for every deviation (docs/DEVIATIONS.md) */
     bool     is_multiplayer;
     uint32_t session_flags;   /* bits ORed from DAT_00526a64/a68 */
 } CmdlineArgs;
