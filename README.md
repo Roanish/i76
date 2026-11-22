@@ -15,7 +15,13 @@ for Linux and modern Windows, Vulkan based and (hopefully) upscaled models and t
 - **Frame rate.** The modern mode is meant to run at any frame rate; `--legacy` keeps the
   original's frame-rate behaviour.
 
-## Current Status — as of 2026-11-22
+## Current Status — as of 2026-11-23
+
+![Rebuild progress: 30%, past Milestone 1 (Drivable)](docs/progress.svg)
+
+Progress is an estimate of the whole rebuild, not a measurement. Milestones: **M1 Drivable**
+(load a level and drive a car), **M2 Missions / Story**, **M3 Functionally complete** (bug
+hunting), then **Complete**.
 
 The live state of each system. **Updated** is when that row last changed.
 
