@@ -96,11 +96,16 @@ cd ..
 # Run
 ./i76 --assets "/path/to/Interstate 76 Nitro Pack"
 ```
+Without `--assets`, assets are read from the current directory.
+i76 launcher defaults to the uphauled harware (vulkan) renderer. For legacy graphics render engine, use '--render sw'
 
-There is no playable game yet. A plain run plays the intro videos and loading screen, then
-opens the world viewer on `miss8/N01.CBT`: an overview of the mission, then after a few
-seconds you are driving (F toggles free-fly / drive). Without `--assets`, assets are read
-from the current directory.
+There is no complete game yet. A plain run plays the intro videos and loading screen(For your nostalgia), then
+opens the world viewer on `miss8/N01.CBT`: an overview of the level terrain, then after a few
+seconds will drop you into the driving mode (F toggles free-fly / drive). 
+This "worldview" is my test bed. Everything here is real engine, as built at the time of release.
+
+
+Assets are your own i76 packages or install. I will not provide original assets here.
 
 ## Running
 
