@@ -15,39 +15,56 @@ for Linux and modern Windows, Vulkan based and (hopefully) upscaled models and t
 - **Frame rate.** The modern mode is meant to run at any frame rate; `--legacy` keeps the
   original's frame-rate behaviour.
 
-## Current Status
+## Current Status — as of 2026-11-22
 
-| System | State |
-|--------|-------|
-| Window + Vulkan renderer | Working — SDL2 window, Vulkan 3D pass, GPU palette lookup, depth-biased road decals |
-| Software renderer | Working — CPU rasteriser, the development fallback and A/B reference |
-| ZFS archive reader | Working — nitro.zfs, LZO1X/LZO1Y decompression, XOR decrypt |
-| VFS + PIX/PAK index | Working — nitro.zix routing, global record→pak index |
-| PCX, fonts, Smacker video | Working — loading screens, `.fnt` text, intro/credits with audio |
-| String table | Stub — the GOG release has no lang.txt |
-| Mesh cache + OEG meshes | Working — faithful GEO mesh cache (dual index, refcount, LRU); textured meshes |
-| Missions | Working — object placement, `.sdf` structures, terrain zones, roads, surface types |
-| Terrain | Working — exact height scale (12-bit × 0.1, bilinear), per-mission textures |
-| Roads | Working — the original's blocks, textures and UVs, clipped to the terrain |
-| Lighting | Working — the original's time-of-day model and `.lum` brightness response, per pixel |
-| Vehicles | Working — `.vcf`/`.vdf` chassis, `.vtf` skins, `.wdf` wheels |
-| Vehicle physics | Base model transcribed — ground handling, engine + 3-speed automatic, steering, grip per surface, suspension |
-| Input | Working — the original `input.map` / `gamekey.map` bindings and analog key stepping |
-| Cameras | External track camera transcribed; other views not yet |
-| Collisions | Not started (props, vehicles, drivable objects) |
-| Damage, weapons, AI | Not started |
-| Mission scripting | Not started |
-| Frontend / shell | Not started — startup goes straight to gameplay |
-| Audio | Not started (videos only) |
-| Multiplayer | Non-goal for now |
+The live state of each system. **Updated** is when that row last changed.
 
-## Next
+| System | State | Updated |
+|--------|-------|---------|
+| Window + Vulkan renderer | Working — SDL2 window, Vulkan 3D pass, GPU palette lookup, depth-biased road decals | 2026-11-22 |
+| Software renderer | Working — CPU rasteriser, the development fallback and A/B reference | 2026-06-21 |
+| ZFS archive reader | Working — nitro.zfs, LZO1X/LZO1Y decompression, XOR decrypt | 2026-06-14 |
+| VFS + PIX/PAK index | Working — nitro.zix routing, global record→pak index | 2026-07-01 |
+| PCX, fonts, Smacker video | Working — loading screens, `.fnt` text, intro/credits with audio | 2026-11-22 |
+| String table | Stub — the GOG release has no lang.txt | 2026-06-05 |
+| Mesh cache + OEG meshes | Working — faithful GEO mesh cache (dual index, refcount, LRU); textured meshes | 2026-06-21 |
+| Missions | Working — object placement, `.sdf` structures, terrain zones, roads, surface types | 2026-11-22 |
+| Terrain | Working — exact height scale (12-bit × 0.1, bilinear), per-mission textures | 2026-07-01 |
+| Roads | Working — the original's blocks, textures and UVs, clipped to the terrain | 2026-11-22 |
+| Lighting | Working — the original's time-of-day model and `.lum` brightness response, per pixel | 2026-11-22 |
+| Vehicles | Working — `.vcf`/`.vdf` chassis, `.vtf` skins, `.wdf` wheels | 2026-11-22 |
+| Vehicle physics | Base model transcribed — ground handling, engine + 3-speed automatic, steering, grip per surface, suspension | 2026-11-22 |
+| Input | Working — the original `input.map` / `gamekey.map` bindings and analog key stepping | 2026-11-22 |
+| Cameras | External track camera transcribed; other views not yet | 2026-11-22 |
+| Collisions | Not started (props, vehicles, drivable objects) | — |
+| Damage, weapons, AI | Not started | — |
+| Mission scripting | Not started | — |
+| Frontend / shell | Not started — startup goes straight to gameplay | — |
+| Audio | Not started (videos only) | — |
+| Multiplayer | Non-goal for now | — |
+
+## Next — as of 2026-11-22
 
 1. Remaining vehicle physics: landing response, bump jolt, damage and flat tyres, the AI
    branch, the distant (off-screen) simulation.
 2. Frame-rate independence for the modern mode (key ramps, suspension filter, camera).
 3. Collisions with props and other vehicles, transcribed from the original.
 4. Stage a real mission: the player's vehicle and spawn from the mission script.
+
+## Progress Snapshots
+
+One line per milestone, newest first. The full detail is in the git history and `docs/`.
+
+- **2026-11-22** — Drivable: the vehicle simulation transcribed from the original, with the
+  original key bindings, track camera, time-of-day lighting and road drawing. World
+  handedness corrected. `--legacy` switch and the deviation register added. Mod layer added.
+- **2026-07-01** — All mesh textures resolve, including `.vqm` pak records and `.m16`.
+- **2026-06-30** — Terrain height and object placement solved; missions render correctly.
+- **2026-06-21** — 3D at last: software and Vulkan backends, textured meshes, world viewer,
+  first roads.
+- **2026-06-17** — PIX/PAK index and the scene viewer; multi-part structures placed.
+- **2026-06-14** — Mission placement chain reversed; OEG mesh decode and mesh viewer.
+- **2026-06-05** — Project start: ZFS/VFS, PCX, fonts, Smacker video, Vulkan palette blit.
 
 ## Goals
 
