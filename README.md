@@ -122,7 +122,7 @@ cd ..
 ./i76 --assets "/path/to/Interstate 76 Nitro Pack"
 ```
 Without `--assets`, assets are read from the current directory.
-i76 launcher defaults to the uphauled harware (vulkan) renderer. For legacy graphics render engine, use '--render sw'
+i76 defaults to the overhauled hardware (Vulkan) renderer. For the software renderer, use `--render sw`.
 
 There is no complete game yet. A plain run plays the intro videos and loading screen(For your nostalgia), then
 opens the world viewer on `miss8/N01.CBT`: an overview of the level terrain, then after a few
