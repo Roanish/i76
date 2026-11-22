@@ -428,8 +428,9 @@ changed (LOD / damage state / part swap).
 | `+0x84`..`+0x93` | 4 dwords (copied as a block) |
 | `+0x94`..`+0xab` | 6-dword block — likely a transform/orientation |
 
-### Still needed
-All 4 geo_cache_acquire callers (obj_model_clone / _set_variant / _set_slot / and
+### Entity store
+Found later: the live-entity creator is `FUN_00453d50` (see "Mission file & object placement").
+Background, kept for the reasoning: all 4 geo_cache_acquire callers (obj_model_clone / _set_variant / _set_slot / and
 assets_preload) only ever *consume* an existing object pointer — none allocate one.
 So the **game object struct is allocated outside the mesh-acquire call graph.** Next
 threads to the real entity store:
@@ -1120,11 +1121,11 @@ Tables: default road texture names 0x00500628 (30 × name), corner index order 0
 far cut 450 (0x004c4f68). Blocks per road from RSEG_loader FUN_004b4370. How the span rasteriser
 splits the 4-vertex polygon is not read ???; ours fans from the first vertex (B_i).
 
-## Vehicle physics — map (2026-11-22, IN PROGRESS)
+## Vehicle physics — map (2026-11-22)
 
-Goal: a faithful transcription of the original vehicle simulation. This section is the map;
-per-function detail is added as each body is transcribed. "seen" = body read; everything else
-is marked ???.
+A faithful transcription of the original vehicle simulation. The base model is implemented in
+src/engine/vehsim.c (see "Implemented" below); what remains is under "Next". "seen" = body read;
+everything else is marked ???.
 
 ### Frame order (Fun_Real_Entry main loop, seen)
 `timer_tick` → `input_poll` → **`game_tick` (0041fad0)** = collision broad phase → `game_tick2`
@@ -1146,7 +1147,9 @@ Model struct = entity+0x70 (FUN_00466640). Analog axes (−1..1) × 004c21b4: **
 (005340a0..ac). The steer ramp is √(t·k), so steering grows with the root of the hold time.
 Clamped to ±0.9999. **+0xe8 = drive direction ±1** (from gear FUN_00466560; reverse_direction
 toggles it), **+0xec start_engine**, **+0xf0 e_brake**, **+0x100 lights**, shift_up/down →
-FUN_00466590 / 004665b0. Constants 004c2188..21d4 not dumped yet ???.
+FUN_00466590 / 004665b0. Constants 004c2188..21d4 (dumped): ×1.52587890625e−5 (1/65536) for the
+analog axes; hold cap 3.0, 1/3; throttle_up step (1 − t/3)·0.4, throttle_down (1 − t/3)·0.5; steer
+±√(t/3); clamp ±0.9999.
 
 ### Sub-stepping (seen: 00462980, 004a3000/3040/30c0, asm of 004a3040)
 Vehicle pass 1: if the vehicle is far/remote (FUN_004359c0(e, 25.0) == 2, ???) or flag 0x20:
@@ -1240,8 +1243,9 @@ Args (entity, accel, flags, airborne, dt). Each wheel's spin (FUN_00466d40) from
 ground normal by the largest wheel penetration. A wheel hanging > 1e−4 above ground tips the body toward it:
 target angular rates ±π (roll) / ±π/2 (pitch) per corner (004c1dd0..1ddc), eased by 2·dt, rotating about the
 corner pivots M+0x48c[corner]. Body up = normal of the plane through the wheel contact points (0049bf90),
-matrix rebuilt keeping the heading (0049ba20). Constants 004c1dc0..1df4. Helpers not yet read: 00466d40,
-00466e90/ea0/eb0, 0045a370, 0049bf90, 0049ba20.
+matrix rebuilt keeping the heading (0049ba20). Constants 004c1dc0..1df4. Helpers read: 00466d40,
+00466e90/ea0/eb0, 0045a370, 0049bf90, 0049ba20. vehsim transcribes all of it except the per-wheel spin
+(00466d40): it gives every wheel the body speed, which in our code only drives the wheel animation.
 
 ### Engine + gearbox (seen: 00453330 init, 00453480 post-init, 00453700 update, 00453520 / 004534a0 shift logic)
 Engine = child entity class 21 at M+0x3c4, model E (0x30 B): +0x00 HP, +0x04 max HP (300), +0x08 gear,
@@ -1256,7 +1260,7 @@ Engine = child entity class 21 at M+0x3c4, model E (0x30 B): +0x00 HP, +0x04 max
 - **Automatic shifting:** hard-coded throttle (T) / speed (×3.6 = km/h) thresholds: 1→2 when T > 0.002; up/down
   windows per gear from constants 0x004c4764..47b8 (e.g. 2→3 between 25 and 62 km/h depending on T;
   3→4 between 40 and 106; downshifts 3→2 below 12..60, 4→3 below 31..98, 2→1 when T < 0.002 and < 0.5 km/h).
-  Exact window shapes: 00453700 + 00453520 (transcribe verbatim).
+  Exact window shapes: 00453700 + 00453520 + 004534a0, transcribed verbatim in vehsim.c.
 - **Selector** M+0x104 (shift_up/down clamp 0..5): **0 P, 1 R, 2 N, 3 D, 4 "2", 5 "1"** (5 caps gear at 2nd,
   4 at 3rd; R sets direction M+0xe8 = −1; N gives no drive; P forces full brake). Spawn default 3 (D).
 
@@ -1343,18 +1347,27 @@ Transcription of the chain above, used by the world viewer's drive mode. Notes f
   cars uphill. vehsim uses (−dX, 1, −dZ) (headless test: rolls downhill at ≈ g sin θ). Verify in-game ???.
 - **Ignition time:** M+0x454 comes from FUN_0041d920 (unread); engsnd.dat's normal ignition time is used ???.
 - **Upside-down auto-flip** (00429530): player only, single-player, at rest roof-down.
-- Not yet: drivable objects in the ground query, landing response 004a76f0 (falls > 35 destroy), bump jolt
-  00463370, damage, the scripted/target-follow branch (model+0x38, FUN_0041ecb0), distant-vehicle sim 00426190.
+- Not yet: see "Next".
 - Headless check (Stag, flat, full throttle): wheelspin off the line, 1→2 at ≈43 mph, 2→3 at ≈68 mph,
   110 mph at 20 s; mass 2298.
 
 ### Next
-Base vehicle physics is mapped (sections above). Before transcribing to code, read the remaining small
-helpers verbatim: 00466d40 (wheel spin), 0049bf90 / 0049ba20 (contact plane + matrix rebuild), 0049b170
-(rotation order), 00463370 (bump jolt), 00426190 (simplified sim for distant/remote vehicles), the exact
-shift windows of 00453700 / 00453520, and the throttle/steer ramp constants 004c2188..21d4 (0043ebf0).
-Collision side (later): COLP 12 floats, VDFC context values (70, 45, 30, 25, 100000), narrow phase 0041fcc0,
-response 004987f0 / 004a76f0. Corpus with recovered parameters: /home/roan/i76_decomp/phys_pid/.
+Vehicle side, faithful (read and transcribe):
+- Landing response 004a76f0 (falls > 35 destroy) and the bump jolt 00463370 (above 7.65 m/s).
+- Damage and flat tyres; the brake damage handler is empty (see "Implemented").
+- The scripted / target-follow branch (model+0x38, FUN_0041ecb0) and the distant-vehicle sim 00426190.
+- Drivable objects (bridges) in the ground query.
+- Per-wheel spin 00466d40.
+- Open questions: rotation order of 0049b170 ???, the terrain normal sign ???, the ignition time
+  (FUN_0041d920) ???.
+
+Modern mode (docs/DEVIATIONS.md "Frame-rate independence"): the per-frame key ramps, the suspension
+filter and the camera step per frame; decide per item what scales with dt in the modern mode.
+
+Collision side, after the above: COLP 12 floats, VDFC context values (70, 45, 30, 25, 100000), narrow
+phase 0041fcc0, response 004987f0 / 004a76f0.
+
+Corpus with recovered parameters: /home/roan/i76_decomp/phys_pid/.
 
 ## game_session_run — Structure
 
@@ -1421,7 +1434,7 @@ back into the engine for rendering, input, audio, etc.
                           [+0x70] FUN_00467940        [+0x7c] &LAB_004be890
 ```
 
-All 32 entries are uncharted — reversing ShellMain is the next step to
+All 32 entries are uncharted — reversing ShellMain is needed to
 understand what each slot does.
 
 ### Shell result values (`DAT_00653b20`)
@@ -2045,62 +2058,5 @@ SetPriorityClass(GetCurrentProcess(), 0x20);  // NORMAL_PRIORITY_CLASS
 
 ## Implementation Status
 
-### ZFS / VFS Layer
-
-| Component | File | Status |
-|-----------|------|--------|
-| ZFS archive reader | `src/engine/zfs.c` / `zfs.h` | DONE — open, bsearch lookup, lzo1x+lzo1y decompress, XOR decrypt |
-| VFS init (.zix parser) | `src/engine/vfs.c` / `vfs.h` | DONE — parses nitro.zix, builds sorted file table, lazy-opens ZFS handles |
-| `vfs_read_file` | `src/engine/vfs.c` | DONE — ZFS and loose-file paths |
-| `vfs_exists` | `src/engine/vfs.c` | DONE — returns uncompressed size or 0 |
-| `vfs_free` | `src/engine/vfs.c` | DONE |
-| VFS file cache | — | NOT YET — no hash-table size cache (vfs_exists hits ZFS every call) |
-| `vfs_lod` / `vfs_lod_cached` / `vfs_lod_pak` | — | NOT YET — stubs needed when textures are loaded |
-| `vfs_cache_evict` | — | NOT YET |
-
-LZO: uses system `liblzo2` (pkg-config `lzo2`). lzo1x = `flags & 0x02`, lzo1y = `flags & 0x04`.
-
-### Font / String Table
-
-| Component | File | Status |
-|-----------|------|--------|
-| `.fnt` loader + renderer | `src/engine/font.c` | DONE — `font_load`, `font_free`, `font_draw`, `font_text_width` |
-| StrLookup API | `src/engine/strlookup.c` | STUB — returns NULL; GOG has no lang.txt |
-
-### PCX
-
-| Component | File | Status |
-|-----------|------|--------|
-| PCX loader | `src/engine/pcx.c` | DONE — reads via `vfs_read_file()`, RLE decode, palette extract |
-
-### Startup
-
-| Component | File | Status |
-|-----------|------|--------|
-| `vfs_init()` wired | `src/main.c` | DONE |
-| Loading screen render | `src/main.c` | DONE — `addon/loadgame.pcx` |
-| Smacker intro/credits | `src/main.c` | DONE — `smk/introf01.smk`, `smk/credf01.smk` |
-| Font smoke test | `src/main.c` | TEMPORARY — draws "INTERSTATE '76" banner; should become proper startup banner |
-
-**Next step:** reverse the 32-entry NITSHELL callback table passed to ShellMain so we can write our own ShellMain stub and get into the gameplay state.
-
----
-
-## Build & Run
-
-```bash
-# Install dependencies (Ubuntu/Debian)
-sudo apt install build-essential cmake libsdl2-dev clangd gdb
-
-# Open in VS Code OSS / VSCodium
-code .         # or: codium .
-
-# Install recommended extensions when prompted (.vscode/extensions.json)
-
-# Build: Ctrl+Shift+B  (runs the "Build" task)
-# Run:   Ctrl+Shift+P → "Tasks: Run Test Task"  (runs the "Run" task)
-
-# Or manually:
-mkdir build && cd build && cmake .. && make
-cd .. && ./i76
-```
+What is implemented, and how to build and run it, is in the README (status table, dated). This
+file records only what was learned from the original.

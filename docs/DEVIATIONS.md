@@ -85,9 +85,25 @@ Unconfirmed reverse-engineering is marked `???` (see docs/REVERSING.md).
 - **Original:** no frame cap; dt is clamped to [0.001, 0.2] s. The camera steps per frame,
   and the keyboard axis stepper rounds dt × 182 down to whole steps, so above about 182 fps
   keys stop moving (docs/REVERSING.md "Frame timer").
-- **Ours:** currently faithful. A frame-rate-independent version is planned for the modern
+- **Ours:** the simulation steps as the original. The world viewer caps itself at 60 fps,
+  which the original does not. A frame-rate-independent version is planned for the modern
   mode.
-- **legacy: will be the current behaviour.**
+- **legacy: planned.** The current stepping, without the 60 fps cap.
+
+### Terrain normal sign in the vehicle simulation
+- **Original:** the ground normal decompiles as (+dX, 1, +dZ) (docs/REVERSING.md "Implemented:
+  src/engine/vehsim.c").
+- **Ours:** (−dX, 1, −dZ). With the decompiled sign, cars roll uphill; with ours they roll
+  downhill at about g·sin θ. Either the decompile or our reading of it is wrong ???.
+- **Where:** `worldview.c` `vehsim_ground_cb`.
+- **legacy: n/a** until the original's behaviour is confirmed in-game.
+
+### Wheel spin
+- **Original:** each wheel's spin from forward speed ± yaw × track.
+- **Ours:** every wheel spins at the body speed. In our code it only drives the wheel
+  animation.
+- **Where:** `vehsim.c` post-step.
+- **legacy: planned.** Transcribe the per-wheel spin.
 
 ### Gameplay frame loop
 - `loop.c` is a placeholder with a fixed 60 Hz step. The original runs variable dt with
