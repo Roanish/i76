@@ -51,6 +51,7 @@ typedef enum {
     PK_P,
     PK_O,
     PK_L,
+    PK_F,
     PK_TAB,
     PK_LSHIFT,
     PK_COUNT
