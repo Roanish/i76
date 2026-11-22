@@ -87,44 +87,88 @@ sudo pacman -S sdl2 sdl2_ttf vulkan-icd-loader vulkan-headers glslang cmake lzo
 # Dependencies (Ubuntu/Debian)
 sudo apt install libsdl2-dev libsdl2-ttf-dev libvulkan-dev glslc cmake build-essential liblzo2-dev
 
-# Build
+# Build (the i76 binary is written to the repository root)
 mkdir build && cd build
 cmake ..
 make
+cd ..
 
-# Run: the world viewer is where the current work lives (drive with SPACE)
-./i76 --assets "/path/to/Interstate 76 Nitro Pack" --worldview --render hw
+# Run
+./i76 --assets "/path/to/Interstate 76 Nitro Pack"
 ```
 
-There is no playable game yet. A plain `./i76` plays the intro videos and loading screen,
-then drops into a placeholder loop (a marker you can move). The viewers below are how to see
-what works today. Without `--assets`, assets are read from the current directory.
+There is no playable game yet. A plain run plays the intro videos and loading screen, then
+opens the world viewer on `miss8/N01.CBT`: an overview of the mission, then after a few
+seconds you are driving (F toggles free-fly / drive). Without `--assets`, assets are read
+from the current directory.
 
 ## Running
 
 | Option | Effect |
 |--------|--------|
-| (none) | Intro videos, loading screen, then a placeholder loop |
+| (none) | Intro videos, loading screen, then the world viewer |
 | `--assets <path>` | Game asset directory (default: current directory) |
 | `--legacy` | Faithful behaviour for every listed deviation ([`docs/DEVIATIONS.md`](docs/DEVIATIONS.md)) |
 | `--mods <path>` | Mod folder (default `<assets>/mods`), see [`docs/MODDING.md`](docs/MODDING.md) |
 | `--no-mods` | Original assets only |
-| `--worldview [mission]` | 3D world viewer and driving test (default `miss8/N01.CBT`) |
-| `--render hw` | World viewer on the Vulkan renderer (default: software) |
+| `--worldview [mission]` | Straight to the world viewer, no intros (default `miss8/N01.CBT`) |
+| `--render sw` | World viewer on the software rasteriser (default: Vulkan, `hw`) |
 | `--sceneview [mission]` | Wireframe object + terrain viewer |
 | `--meshview` | Browse decoded meshes |
+| `--gameloop` | The game state-machine scaffold (placeholder loop) |
 
-World viewer keys:
+### World viewer keys
+
+The viewer opens on an overview of the mission and hands over to driving after a few
+seconds. The keys for the current mode are listed on screen, top left. Driving uses the
+original game's bindings only; the viewer's own keys (marked *viewer*, orange on screen) sit
+on keys the original leaves free.
+
+The original bindings are read from `input.map` and `gamekey.map` in the game folder. They are
+plain text, so a keyboard without a numpad can be rebound there.
+
+**Drive**
 
 | Key | Action |
 |-----|--------|
-| SPACE | Toggle free-fly / drive |
-| Free-fly: W A S D, Q E, arrows, Shift | Move, down/up, look, faster |
-| Drive | The original `input.map` bindings, plus W A S D |
-| O | Orbit camera around the car (W A S D / arrows orbit, Q E zoom) |
-| TAB | Software / Vulkan renderer (outside drive mode; in drive mode TAB is reverse) |
-| L | Step the time of day by 3 hours |
-| P | Cycle a debug terrain height multiplier |
+| Numpad arrows | Throttle, brake, steer |
+| Arrow keys | Look around |
+| S | Engine on / off |
+| Z | Handbrake |
+| `.` / `,` | Shift up / down |
+| TAB | Reverse direction |
+| PgUp / PgDn | Camera distance |
+| F1 – F11 | Change view (only the chase cam exists so far) |
+| F | Fly (*viewer*) |
+
+**Fly** (all *viewer* keys)
+
+| Key | Action |
+|-----|--------|
+| F | Drive the car |
+| W A S D | Move |
+| Q / E | Down / up |
+| Arrows | Look |
+| Shift | Faster |
+| TAB | Software / Vulkan renderer |
+| P | Terrain height multiplier (debug) |
+
+**Orbit**, to inspect the car (all *viewer* keys)
+
+| Key | Action |
+|-----|--------|
+| Arrows / W A S D | Rotate |
+| Q / E | Zoom |
+| Shift | Faster |
+| O | Back |
+
+**Any mode** (*viewer* keys)
+
+| Key | Action |
+|-----|--------|
+| O | Orbit the car |
+| Shift+L | Time of day +3 hours |
+| ESC | Quit |
 
 ## Project Structure
 
