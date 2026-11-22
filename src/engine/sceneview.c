@@ -110,8 +110,9 @@ static void cam_orbit(Cam *c, const float center[3], float az, float el, float d
 
     float wup[3] = {0,1,0};
     vsub(center, c->eye, c->fwd); vnorm(c->fwd);
-    vcross(c->fwd, wup, c->right); vnorm(c->right);
-    vcross(c->right, c->fwd, c->up); vnorm(c->up);
+    /* Left-handed world: right = up x fwd. */
+    vcross(wup, c->fwd, c->right); vnorm(c->right);
+    vcross(c->fwd, c->right, c->up); vnorm(c->up);
     c->focal = (FB_H * 0.5f) / tanf(0.5f * 1.05f);   /* ~60 deg vertical FOV */
 }
 

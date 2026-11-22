@@ -369,8 +369,7 @@ VehicleModel *vehicle_load(const char *vdf_name, const char *vtf_name)
      * vehicle model +0x168. Per record: +0x00 present flag, +0x04 3x3,
      * +0x28 position (vehicle frame); the wheel loader FUN_004b92f0 copies
      * +0x04.. into the wheel entity's matrix and +0x28.. into its position.
-     * Matrix read column-major like the OBJ/part records ??? (identity on
-     * every vdstag record, so the order is unverified). */
+     * Matrix read column-major like the OBJ/part records. */
     long wl = find_chunk(d, 0, (long)sz, "WLOC");
     if (wl >= 0 && wl + 8 + 6 * 0x38 <= (long)sz) {
         for (int w = 0; w < 6; w++) {

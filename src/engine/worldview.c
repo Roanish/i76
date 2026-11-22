@@ -1152,8 +1152,8 @@ void worldview_run(const char *mission_path, RenderMode mode)
         if (orbit) {
             /* Orbit: car parked; arrows/AD rotate, WS pitch, QE zoom (Shift = fast). */
             float rot = 1.6f * dt * (in.held[PK_LSHIFT] ? 2.5f : 1.0f);
-            if (in.held[PK_LEFT]  || in.held[PK_A]) orb_yaw   -= rot;
-            if (in.held[PK_RIGHT] || in.held[PK_D]) orb_yaw   += rot;
+            if (in.held[PK_LEFT]  || in.held[PK_A]) orb_yaw   += rot;
+            if (in.held[PK_RIGHT] || in.held[PK_D]) orb_yaw   -= rot;
             if (in.held[PK_UP]    || in.held[PK_W]) orb_pitch += rot;
             if (in.held[PK_DOWN]  || in.held[PK_S]) orb_pitch -= rot;
             if (orb_pitch >  1.5f) orb_pitch =  1.5f;
@@ -1188,8 +1188,8 @@ void worldview_run(const char *mission_path, RenderMode mode)
         } else {
             /* Free-fly: arrows look, WASD/QE move, Shift boost. */
             float look = 1.4f * dt;
-            if (in.held[PK_LEFT])  yaw   -= look;
-            if (in.held[PK_RIGHT]) yaw   += look;
+            if (in.held[PK_LEFT])  yaw   += look;
+            if (in.held[PK_RIGHT]) yaw   -= look;
             if (in.held[PK_UP])    pitch += look;
             if (in.held[PK_DOWN])  pitch -= look;
             if (pitch >  1.5f) pitch =  1.5f;
@@ -1198,7 +1198,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
             float cp = cosf(pitch), sp = sinf(pitch), cy = cosf(yaw), sy = sinf(yaw);
             fwd[0] = cp*cy; fwd[1] = sp; fwd[2] = cp*sy;
             float wup[3]   = { 0, 1, 0 };
-            float right[3]; vcross(fwd, wup, right); vnorm(right);
+            float right[3]; vcross(wup, fwd, right); vnorm(right);   /* left-handed */
 
             float spd = base_speed * dt * (in.held[PK_LSHIFT] ? 4.0f : 1.0f);
             if (in.held[PK_W]) for (int i=0;i<3;i++) eye[i] += fwd[i]   * spd;
@@ -1235,6 +1235,8 @@ void worldview_run(const char *mission_path, RenderMode mode)
         float view[16], proj[16];
         mat_lookat_up(view, eye, fwd, cam_up);
         mat_perspective(proj, fovy, (float)FB_W / FB_H, znear, zfar);
+        /* The world is left-handed; mirror clip x. */
+        proj[0] = -proj[0];
 
         render_begin_frame();
 

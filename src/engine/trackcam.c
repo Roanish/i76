@@ -15,7 +15,7 @@
 #include <math.h>
 #include <string.h>
 
-#define DEG   0.017453292f      /* 0x3c8efa35: pi/180 (axis -> radians/frame) */
+#define DEG   0.017453292f      /* pi/180 per axis unit per frame */
 #define PITCH_MIN 0.017453292f
 #define PITCH_MAX 1.5707963f
 #define DIST_MIN  1.0f
@@ -23,7 +23,7 @@
 #define DIST_CAP  150.0f
 #define EASE_MAX  0.95f
 #define SNAP_GAP  0.005f
-#define YAW_WRAP_TRIGGER 6283.06f  /* 0x45c4597c */
+#define YAW_WRAP_TRIGGER 6283.1855f
 #define TWO_PI    6.2831855f
 
 /* ---- small quaternion helpers (x, y, z, w) ------------------------------ */
