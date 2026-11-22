@@ -84,9 +84,11 @@ int main(int argc, char *argv[])
     bool mesh_view = false;
     const char *scene_view = NULL;   /* wireframe mission path, or NULL */
     const char *world_view = NULL;   /* solid 3D mission path, or NULL  */
-    RenderMode  world_mode = RENDER_SOFTWARE;  /* faithful path is the default */
+    bool game_loop = false;          /* --gameloop: state-machine scaffold */
+    RenderMode  world_mode = RENDER_HARDWARE;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--meshview") == 0) mesh_view = true;
+        else if (strcmp(argv[i], "--gameloop") == 0) game_loop = true;
         else if (strcmp(argv[i], "--sceneview") == 0)
             scene_view = (i + 1 < argc && argv[i+1][0] != '-') ? argv[++i]
                                                                : "miss8/N01.CBT";
@@ -199,9 +201,12 @@ int main(int argc, char *argv[])
     /* Any keypress skips. Not found = silently continue.              */
     /* -------------------------------------------------------------- */
 
+    /* With no viewer chosen, the intros play and the world viewer opens on
+     * the default mission: there is no playable game yet. */
     if (!mesh_view && !scene_view && !world_view) {
         video_play("smk/introf01.smk");
         video_play("smk/credf01.smk");
+        if (!game_loop) world_view = "miss8/N01.CBT";
     }
 
     /* -------------------------------------------------------------- */
@@ -232,8 +237,8 @@ int main(int argc, char *argv[])
     /* -------------------------------------------------------------- */
 
     if (world_view) {
-        /* Developer entry point: solid 3D scene with a free-fly camera. */
-        fprintf(stdout, "[main] --worldview: %s (%s)\n", world_view,
+        /* Solid 3D world: free-fly camera and the vehicle simulation. */
+        fprintf(stdout, "[main] world viewer: %s (%s)\n", world_view,
                 world_mode == RENDER_SOFTWARE ? "software" : "hardware");
         worldview_run(world_view, world_mode);
     } else if (scene_view) {
