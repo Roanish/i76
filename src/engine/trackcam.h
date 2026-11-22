@@ -3,7 +3,7 @@
 
 /*
  * trackcam.h — the original's external "track" camera (view 0x0f, the
- * default external view), reproduced from nitro.exe FUN_00435330.
+ * default external view), reproduced.
  * See docs/REVERSING.md "Camera views + the external (track) camera".
  *
  * Per frame, with s = 2*dt:

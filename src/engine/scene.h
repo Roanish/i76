@@ -10,7 +10,7 @@
  *
  * Parses an I'76 mission file (e.g. miss8/N01.CBT), walks ODEF -> OBJ records,
  * and turns each placed object into one or more renderable items. The OBJ
- * record layout (confirmed from object_alloc, FUN_004b3e20):
+ * record layout:
  *   +0x00 name[16]   +0x08 3x3 orientation   +0x2c world position   +0x5c type
  * For a structure object the name resolves to a <name>.sdf whose SGEO chunk
  * lists part meshes (each with a structure-LOCAL transform); we compose
@@ -32,8 +32,7 @@ typedef struct {
  * each non-empty cell gets one zone slab from the .TER file. Scale is derived
  * empirically (see scene.c): coarse cell = 640 world units, so fine cell = 5.
  * Cell (fz,fx) -> world x = origin[0]+fx*cell, z = origin[1]+fz*cell,
- *                 y = heights[fz*dim+fx] * 0.1 (see terrain_height_sample,
- *                 nitro.exe FUN_004953e0: bilinear, vertical scale 0.1).
+ *                 y = heights[fz*dim+fx] * 0.1 (bilinear between cells).
  * Each .TER cell is a u16; the visible height is the low 12 bits =
  * ((byte1 & 0x0F) << 8) | byte0, range 0..4095. byte1>>4 is the material.
  */
@@ -55,7 +54,7 @@ typedef struct {
 } RoadRib;
 
 /* One RSEG chunk = one road: payload +0x00 type (selects the texture set,
- * type % 3), +0x04 rib count, ribs from +0x08 (RSEG_loader FUN_004b4370). */
+ * type % 3), +0x04 rib count, ribs from +0x08. */
 typedef struct {
     int type;
     int first, count;   /* range in Scene.road */

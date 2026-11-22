@@ -1,13 +1,13 @@
 /*
  * vehicle.c — load a .vdf chassis model from its VGEO part grid (see vehicle.h).
  *
- * Faithful to the reversed loaders (docs/REVERSING.md "VDF vehicle definition"):
- *   vgeo_load (FUN_004b90b0): VGEO payload = [u32 part_count] + 28 groups
+ * Faithful to the original loaders (docs/REVERSING.md "VDF vehicle definition"):
+ *   VGEO payload = [u32 part_count] + 28 groups
  *     (7 damage states x 4 LODs, contiguous) of part_count x 0x64-byte records.
- *   vdf_parts_build (FUN_004b3140): parts are created from group (0,0); record
+ *   Parts are created from group (0,0); record
  *     +0x38 parent name ("WORLD"/"none" = vehicle root, else a sibling) chains
  *     them; the mesh name is the record name + ".geo" with every char & 0x7f
- *     (geo_name_format FUN_004b3060 — high bits may be set in the file).
+ *     (high bits may be set in the file).
  * Verified byte-exact on vdstag.vdf (28*31*0x64 == VGEO payload).
  */
 
@@ -157,18 +157,16 @@ static void append_parts(VehicleModel *v, Part *parts, int np,
 }
 
 /* ----------------------------------------------------------------------- */
-/* Skin (.vtf) — in-game VTFC handler FUN_004ba600 (chunk table 0x505508).  */
-/* The handler is passed the CHUNK START (tag), so offsets below are        */
-/* relative to the "VTFC" tag. Layout (all names 13-byte slots, "null"-     */
-/* prefixed = empty, skipped via _strnicmp(slot, "null", 4)):               */
-/*   +0x08 vdf name[13], +0x15 colour name[16] (garage list, FUN_004bb030)  */
+/* Skin (.vtf). Offsets are relative to the "VTFC" tag.                     */
+/* Layout (all names 13-byte slots; a "null" prefix = empty):              */
+/*   +0x08 vdf name[13], +0x15 colour name[16] (garage list)                */
 /*   +0x25 + state*0x152: per damage state V1/V3/V5, four 6-slot groups     */
 /*        FT,MD,BK,TP (stride 0x4e), sides FT,BK,RT,LF,TP,UN; bound as      */
 /*        "V<n> <GRP> <SIDE>.map" on that group's part slot                 */
 /*   +0x15d front-bumper slot -> "V1/V3/V5 FB FT.map" on slot FB            */
 /*   +0x16a back-bumper slot  -> "V1/V3/V5 BB BK.map" on slot BB            */
-/*   +0x41b 12 debris .map names (FUN_004a6020 — not used yet)             */
-/*   +0x4b7 body .map -> "V1 BO DY.map" on EVERY part (FUN_004bafa0)        */
+/*   +0x41b 12 debris .map names (not used yet)                            */
+/*   +0x4b7 body .map -> "V1 BO DY.map" on EVERY part                     */
 /* ----------------------------------------------------------------------- */
 
 #define VTF_SLOT 13
@@ -240,7 +238,7 @@ const char *vehicle_face_texture(const VehicleModel *v, int part, const char *fa
     return face_name;
 }
 
-/* vgeo_part_register (FUN_004b8ff0): part type -> model slot. */
+/* vgeo_part_register: part type -> model slot. */
 static int type_to_slot(int type)
 {
     switch (type) {
@@ -254,10 +252,9 @@ static int type_to_slot(int type)
     }
 }
 
-/* Wheels: wheel loader FUN_004b92f0 parses the .wdf (chunk table 0x505548:
- * WDFC 004b9580 / WGEO 004b9690 / EXIT). WGEO payload = [u32 count] + 16
- * groups of count x 0x64 records (part_groups_split 004b3110, 0x10 groups),
- * built as two 8-group sets (4 x 2 grid each, vdf_parts_build 004b3140): set A
+/* Wheels: the .wdf has chunks WDFC, WGEO, EXIT. WGEO payload = [u32 count]
+ * + 16 groups of count x 0x64 records, built as two 8-group sets (4 x 2 grid
+ * each, like the chassis parts): set A
  * -> first wheel object, set B -> second. The loader then gives wheel A the
  * WLOC record [axle_first] and wheel B [axle_first+1] (matrix + position).
  * We take each set's group 0 (records [0,count) and [8*count,9*count)), the
@@ -304,8 +301,7 @@ int vehicle_attach_wheels(VehicleModel *v, const char *wdf_name, int axle_first)
 
 VehicleModel *vehicle_load_vcf(const char *vcf_name)
 {
-    /* VCFC handler (FUN_004b8660, chunk table 0x5052a8) also gets the chunk
-     * start: +0x18 vdf name[13], +0x25 vtf name[13]. */
+    /* VCFC, relative to the tag: +0x18 vdf name[13], +0x25 vtf name[13]. */
     size_t sz = 0;
     uint8_t *d = vfs_read_file(vcf_name, &sz);
     if (!d) { fprintf(stderr, "[veh] cannot open %s\n", vcf_name); return NULL; }
@@ -318,8 +314,7 @@ VehicleModel *vehicle_load_vcf(const char *vcf_name)
     char vdf[VTF_SLOT + 1], vtf[VTF_SLOT + 1];
     memcpy(vdf, d + c + 0x18, VTF_SLOT); vdf[VTF_SLOT] = '\0';
     memcpy(vtf, d + c + 0x25, VTF_SLOT); vtf[VTF_SLOT] = '\0';
-    /* +0x3e / +0x4b / +0x58: wheel defs for axles 0/1/2 (FUN_004b92f0 with
-     * WLOC index 0/2/4). */
+    /* +0x3e / +0x4b / +0x58: wheel defs for axles 0/1/2 (WLOC index 0/2/4). */
     char wdf[3][VTF_SLOT + 1];
     for (int a = 0; a < 3; a++) {
         memcpy(wdf[a], d + c + 0x3e + a * VTF_SLOT, VTF_SLOT);
@@ -365,11 +360,9 @@ VehicleModel *vehicle_load(const char *vdf_name, const char *vtf_name)
 
     VehicleModel *v = calloc(1, sizeof *v);
 
-    /* WLOC (wloc_load FUN_004b92b0): 6 x 0x38 records copied verbatim to the
-     * vehicle model +0x168. Per record: +0x00 present flag, +0x04 3x3,
-     * +0x28 position (vehicle frame); the wheel loader FUN_004b92f0 copies
-     * +0x04.. into the wheel entity's matrix and +0x28.. into its position.
-     * Matrix read column-major like the OBJ/part records. */
+    /* WLOC: 6 x 0x38 records. Per record: +0x00 present flag, +0x04 3x3,
+     * +0x28 position (vehicle frame); they become the wheels' matrix and
+     * position. Matrix read column-major like the OBJ/part records. */
     long wl = find_chunk(d, 0, (long)sz, "WLOC");
     if (wl >= 0 && wl + 8 + 6 * 0x38 <= (long)sz) {
         for (int w = 0; w < 6; w++) {

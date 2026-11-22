@@ -1,10 +1,10 @@
 /*
  * trackcam.c — the original external track camera (see trackcam.h).
  *
- * Transcribed from nitro.exe FUN_00435330. The original composes row-vector
- * matrices, camera-local (0,0,-d) * Rx(pitch) * Ry(yaw) * R(quat) + lookat;
- * here the same chain is written column-vector (reverse order, transposed
- * rotations). Constants (0x004c2070..0x004c20d8):
+ * The original composes row-vector matrices,
+ * camera-local (0,0,-d) * Rx(pitch) * Ry(yaw) * R(quat) + lookat; here the
+ * same chain is written column-vector (reverse order, transposed rotations).
+ * Constants:
  *   pitch clamp [pi/180, pi/2], axis scale pi/180 per frame, dist clamp [1,10],
  *   dist cap 150, ease window s in [0, 0.95], snap gap 0.005,
  *   ground: test y-0.1 < h+0.5, set y = h+0.6.
@@ -61,7 +61,7 @@ static void quat_from_mat(const float m[9], float q[4])
 
 static void mat_from_quat(const float q[4], float m[9])
 {
-    /* Same form as nitro.exe FUN_0049b480. */
+    /* Same form as the original's quaternion-to-matrix. */
     float x = q[0], y = q[1], z = q[2], w = q[3];
     m[0] = 1 - 2*(y*y + z*z); m[1] = 2*(x*y - w*z);     m[2] = 2*(x*z + w*y);
     m[3] = 2*(x*y + w*z);     m[4] = 1 - 2*(x*x + z*z); m[5] = 2*(y*z - w*x);

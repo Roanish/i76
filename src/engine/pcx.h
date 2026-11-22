@@ -10,11 +10,6 @@
  *   <scenario>.pcx       — scenario-specific loading screen
  *   (others throughout menus and UI)
  *
- * Confirmed from REVERSING.md:
- *   FUN_00470b90  pcx_open()    — loads header, returns ptr or NULL
- *   FUN_00471000  pcx_decode()  — decodes pixels into a dest surface
- *   FUN_00499b20  pcx_free()    — frees the header ptr
- *
  * Format: ZSoft PCX, version 5, 8-bit indexed (1 plane), RLE encoded.
  * Palette: 256 × RGB, last 769 bytes of file (0x0C marker + 768 data bytes).
  */

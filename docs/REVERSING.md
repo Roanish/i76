@@ -125,6 +125,27 @@ STARTUPINFO.wShowWindow as param_4. This is the standard WinMain call.
 
 ---
 
+## Platform layer
+
+Moved from the code (src/platform/platform.h):
+- Window class name "Interstate '76 Nitro Pack" (s_Interstate_'76_Nitro_Pack_004f3618); WNDCLASSA
+  style CS_HREDRAW|CS_VREDRAW, cbWndExtra 4, IDC_ARROW, BLACK_BRUSH. RegisterClassA +
+  CreateWindowA + ShowWindow around 0x004339a0 in Fun_Real_Entry.
+- Single-instance guard: FindWindowA at the top of Fun_Real_Entry.
+- WM_QUIT (0x12) is intercepted by hand in every PeekMessageA pump (5+ copies in Fun_Real_Entry):
+  sets DAT_00653c18 = 1 and DAT_00526a44 = wParam.
+- Process priority: HIGH_PRIORITY_CLASS during AI, NORMAL after (we do not do this).
+- Shutdown: FUN_00484af0(&DAT_00653b40) destroys the window, then FreeLibrary(NITSHELL.DLL);
+  render shutdown is FUN_0046dc10.
+- Memory pools: DAT_00653fa0 = FUN_004a3c00(0x1a5e0, 0x40000), DAT_00653fa4 =
+  FUN_004a3c00(0x80000, 0x80000). FUN_004a3c00 wraps VirtualAlloc ??? (body not read).
+- NITSHELL.DLL function table: DAT_00653f3c BeginFrame, 00653f40 EndFrame, 00653f48 SetPalette,
+  00653f4c Init, 00653f60 Flip.
+- Lighting constants (moved from src/engine/lighting.c): phase angles are the float bit patterns
+  0x3f060a92, 0x3f9c61aa, 0x3fa78d36, 0x3f75be0b, 0x3e32b8c2, 0x3f490fda; haze DAT_00617ffc =
+  0x3f3fe4a6, DAT_00618000 = 0x39dad16a; the shade-row stage is FUN_00496a00 (8064/256).
+- Track camera constants (moved from src/engine/trackcam.c) are at 0x004c2070..0x004c20d8.
+
 ## Game State Machine
 
 `DAT_004f30cc` / `g_gamestate` values, reverse engineered from
@@ -1092,6 +1113,10 @@ B_i+1 (0,1): one texture repeat per quad. Lit as flat-up: intensity × L.y × ha
 (DAT_00617ff0..f8 = light vector). Optional per-mission override list "<mission>.rtm".
 Ours: road Y from the rendered terrain triangles, subdivided at half-cell, drawn depth-biased
 (render_3d_draw_decal); the old 0.6 lift was ours, not the original's.
+Tables: default road texture names 0x00500628 (30 × name), corner index order 0x00500618
+{1,0,2,3} over the rib verts A0,B0,A1,B1, corner UVs 0x005005e8; near depth 60 (0x004c4f6c),
+far cut 450 (0x004c4f68). Blocks per road from RSEG_loader FUN_004b4370. How the span rasteriser
+splits the 4-vertex polygon is not read ???; ours fans from the first vertex (B_i).
 
 ## Vehicle physics — map (2026-11-22, IN PROGRESS)
 

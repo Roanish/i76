@@ -6,9 +6,8 @@
  *
  * gameplay_run() is the engine heartbeat: it owns the screen while
  * g_gamestate == GS_GAMEPLAY and returns when the state changes (e.g. the
- * player quits). This mirrors the original binary's inner `while(state==5)`
- * loop in Fun_Real_Entry — each top-level game state runs its own inner loop
- * rather than sharing one outer pump.
+ * player quits). As in the original, each top-level game state runs
+ * its own inner loop rather than sharing one outer pump.
  *
  * The loop runs a fixed-timestep simulation with interpolated rendering:
  * the world updates in deterministic FIXED_STEP increments, decoupled from

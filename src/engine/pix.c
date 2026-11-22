@@ -1,7 +1,7 @@
 /*
  * pix.c — global PIX/PAK record index (see pix.h).
  *
- * Mirrors the original pix_init (FUN_00467cd0) / vfs_lod_pak (PIX/PAK resolver):
+ * Mirrors the original pix_init / vfs_lod_pak (PIX/PAK resolver):
  *   - glob *.pix via the VFS,
  *   - for each, the owning pak is the same base name + ".pak",
  *   - parse the text body ("<count>" then "NAME.ext off len" lines),

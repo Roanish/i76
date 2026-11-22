@@ -1,11 +1,6 @@
 /*
  * keybind.c — the original input binding system (see keybind.h).
- *
- * Reversed from nitro.exe (docs/REVERSING.md "Input bindings"):
- *   input.map parser   FUN_00440620 / chord FUN_004403f0 (max 8 terms)
- *   key name -> channel FUN_0043fd20 (keyboard channel table 0x004f70c8)
- *   analog sink build   FUN_0043fe30, stepper FUN_00441110, output input_poll
- *   gamekey.map         loaded by name (command table 0x004f47d0)
+ * Reference: docs/REVERSING.md "Input bindings".
  */
 
 #include "engine/keybind.h"
@@ -17,12 +12,11 @@
 #include <string.h>
 #include <strings.h>
 
-#define MAX_TERMS    8      /* "chord too big" above 8 (FUN_004403f0) */
+#define MAX_TERMS    8      /* "chord too big" above 8 */
 #define MAX_CHORDS 256
 #define MAX_GAMEKEYS 64
 
-/* Virtual "either side" channels (FUN_00442db0 sets them from 0x2a/0x36 and
- * 0x1d/0x70 -> bits 22/23 of word 3 = channels 118/119). */
+/* Virtual "either side" channels, set from both left and right keys. */
 #define CH_SHIFT   118
 #define CH_CONTROL 119
 
@@ -75,7 +69,7 @@ static int channel_by_name(const char *name)
     return -1;
 }
 
-/* Sink init (FUN_0043fe30): value = ((dflt<<16) - (min<<16))*2/range - 1.0 */
+/* Sink init: value = ((dflt<<16) - (min<<16))*2/range - 1.0 */
 static void sink_init(int a)
 {
     const KbActionDef *d = &KB_ACTIONS[a];
@@ -88,7 +82,7 @@ static void sink_init(int a)
     k->alias = strstr(d->name, "_delta") != NULL;
 }
 
-/* X_plus / X_minus -> the axis X, else X_delta (FUN_00440620). */
+/* X_plus / X_minus -> the axis X, else X_delta. */
 static void link_plus_minus(int a)
 {
     char base[48];
@@ -189,7 +183,7 @@ static void parse_input_map(LineSrc *f, const char *src)
         if (a < 0 || !usable || c.nterms == 0) continue;
         if (KB_ACTIONS[a].type == 0) {
             /* A key bound straight to an axis is an analog channel in the
-             * original (FUN_0043fc00) — keyboards don't provide those. */
+             * original — keyboards don't provide those. */
             fprintf(stderr, "[keys] %s: '%s' is an axis; bind %s_plus/_minus instead\n",
                     src, name, name);
             continue;
@@ -203,9 +197,8 @@ static void parse_input_map(LineSrc *f, const char *src)
 /* gamekey.map                                                               */
 /* ----------------------------------------------------------------------- */
 
-/* Key token -> HID usage. Gamekey names are characters + key names
- * (exact gamekey name table not reversed ???); keyboard channel names are
- * accepted too. */
+/* Key token -> HID usage. Accepts single characters, common key names and
+ * keyboard channel names. */
 static int gamekey_hid(const char *k)
 {
     if (k[0] && !k[1]) {
@@ -323,7 +316,7 @@ static bool channel_held(const RawInputState *in, int ch)
     return hid(in, KB_CHANNELS[ch].hid);
 }
 
-/* Analog sink stepper (FUN_00441110), one frame. */
+/* Analog sink stepper, one frame. */
 static void sink_step(Sink *k, int rate, bool plus, bool minus, float dt)
 {
     int a  = (int)(dt * 182.0f);                 /* ftol truncates (dt * 0x43360000) */

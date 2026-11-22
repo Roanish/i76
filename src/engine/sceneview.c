@@ -193,7 +193,7 @@ static void draw_terrain(uint8_t *fb, const Cam *c, const TerrainPatch *p,
         for (int gx = 0; gx < n; gx += step, cols++) {
             int h = p->heights[height_index(p, gx, gz, orient)];
             float w[3] = { p->origin[0] + gx * p->cell,
-                           h * (0.1f * hscale),   /* 12-bit height * 0.1 (FUN_004953e0) */
+                           h * (0.1f * hscale),   /* 12-bit height * 0.1 */
                            p->origin[1] + gz * p->cell };
             float sx, sy;
             uint8_t vis = (uint8_t)project(c, w, &sx, &sy);
@@ -279,8 +279,8 @@ void sceneview_run(const char *mission_path)
     if (dist < 50.0f) dist = 50.0f;
     bool spin = true;
 
-    /* Vertical scale is known (height12 * 0.1, FUN_004953e0); HS is a debug
-     * multiplier on top — 1.0 is exact, SPACE cycles it. */
+    /* HS is a debug multiplier on the height12 * 0.1 scale: 1.0 is exact,
+     * SPACE cycles it. */
     static const float HS[] = { 1.0f, 0.85f, 1.25f, 1.5f, 0.5f };
     int   hs_idx = 0;            /* -> 1.0 (exact) */
     int   orient = 0;           /* within-patch heightfield orientation */

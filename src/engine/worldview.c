@@ -1,11 +1,11 @@
 /*
  * worldview.c — solid 3D scene viewer with a free-fly camera (see worldview.h).
  *
- * Builds geometry from the mission Scene (objects + terrain) and renders it
- * through either backend — the software CPU rasterizer (softraster.c) or the
- * hardware Vulkan pass (render_3d_*) — sharing one camera so TAB gives a direct
- * A/B, mirroring the original game's software/Glide split. Both produce a
- * flat-shaded, depth-buffered, two-sided look for judging placement.
+ * Builds geometry from the mission Scene (objects, terrain, roads) and renders
+ * it through either backend — the software rasterizer (softraster.c) or the
+ * Vulkan pass (render_3d_*) — sharing one camera, mirroring the original's
+ * software/Glide split. Drive mode runs the vehicle simulation (vehsim.c)
+ * with the original's track camera.
  */
 
 #include "worldview.h"
@@ -25,7 +25,7 @@
 #include "engine/mods.h"         /* asset_present_file (palette) */
 #include "engine/lighting.h"     /* time-of-day global light */
 #include "engine/keybind.h"      /* original input.map / gamekey.map bindings */
-#include "engine/trackcam.h"     /* original external track camera (view 0x0f) */
+#include "engine/trackcam.h"     /* original external track camera */
 #include "engine/vehsim.h"       /* the original vehicle simulation */
 #include "engine/pix.h"          /* vfs_lod (.lum: lighting is not moddable) */
 #include "engine/texture.h"
@@ -127,15 +127,15 @@ static void rel_model(float m[16], const float R[9], const float t[3], const flo
  * The software path reads only pos+uv. */
 #define MV RENDER_VERT_FLOATS
 #define TERRAIN_TILE 96.0f   /* world units per terrain-texture repeat */
-/* Vertical scale: world Y = height12 * 0.1 (nitro.exe terrain_height_sample,
- * FUN_004953e0). `hscale` is now a debug multiplier on this (1.0 = exact). */
+/* Vertical scale: world Y = height12 * 0.1. `hscale` is a debug multiplier on
+ * this (1.0 = exact). */
 #define TERRAIN_Y_SCALE 0.1f
 
 /* Height (12-bit, unscaled) at a GLOBAL fine-grid point, searching all patches.
  * Adjacent patches are contiguous on the global grid (patch at coarse (row,col)
  * covers points [col*128, col*128+127]), so cross-patch lookups resolve the
- * neighbour's border points — the original samples one global zone grid the
- * same way (terrain_height_sample, FUN_004953e0). -1 if no patch covers it. */
+ * neighbour's border points, as the original samples one global zone grid.
+ * -1 if no patch covers it. */
 static float cell_h12(const Scene *s, long gx, long gz)
 {
     for (int i = 0; i < s->patch_count; i++) {
@@ -151,7 +151,7 @@ static float cell_h12(const Scene *s, long gx, long gz)
 static float sample_terrain_y(const Scene *s, float x, float z, float hscale);
 
 /* Outward terrain normal at GLOBAL grid point (gx,gz), exactly as the
- * original's D3D terrain path (FUN_00495f80): central differences of the
+ * original's D3D terrain path: central differences of the
  * 12-bit heights one cell either side, scaled 0.1/cell, n = (-dx, 1, -dz)
  * normalised. (Missing neighbours fall back to the centre height; the
  * original reads 0 there, which only matters at the world edge.) */
@@ -226,8 +226,7 @@ static float *build_terrain_verts(const Scene *s, const TerrainPatch *p,
 }
 
 /* Terrain world-Y under (x,z): bilinear over the 4 surrounding global grid
- * points, scaled by 0.1 — faithful to nitro.exe terrain_height_sample
- * (FUN_004953e0), including across patch boundaries. Missing neighbours fall
+ * points, scaled by 0.1 as the original, including across patch boundaries. Missing neighbours fall
  * back to the base corner (the viewer has no default zone slab); 0 if (x,z)
  * is outside all patches. */
 static float sample_terrain_y(const Scene *s, float x, float z, float hscale)
@@ -247,7 +246,7 @@ static float sample_terrain_y(const Scene *s, float x, float z, float hscale)
     return (hx0 + (hx1 - hx0) * tz) * (TERRAIN_Y_SCALE * hscale);
 }
 
-/* Ground query for the track camera (terrain_height_sample equivalent). */
+/* Ground query for the track camera. */
 typedef struct { const Scene *scene; float hscale; } TerrainGroundCtx;
 static float terrain_ground_cb(void *ud, float x, float z)
 {
@@ -320,8 +319,8 @@ static float terrain_tri_y(const Scene *s, long cx, long cz, int h, float tx, fl
 /* segments", "Frame timer + road height").                                 */
 /* ----------------------------------------------------------------------- */
 
-/* Default road textures (nitro.exe 0x00500628, 30 x name); a mission's
- * "<mission>.rtm" replaces them line by line (roads_drape_to_terrain). */
+/* Default road textures; a mission's "<mission>.rtm" replaces them line by
+ * line. */
 static const char *const ROAD_TEX_DEFAULT[30] = {
     "r2anr_11.map","r2anr_21.map","r2anr_31.map","r2anr_41.map","r2anr_51.map",
     "r2anr_61.map","r2anr_71.map","r2anr_81.map","r2anr_91.map","r2anr_01.map",
@@ -330,15 +329,15 @@ static const char *const ROAD_TEX_DEFAULT[30] = {
     "r2dnr_17.map","r2dnr_27.map","r2dnr_37.map","r2dnr_47.map","r2dnr_57.map",
     "r2wnr_19.map","r2wnr_29.map","r2wnr_39.map","r2wnr_49.map","r2wnr_59.map",
 };
-/* Texture index per quad (0x005006a0, 3 sets x 20): set = road type % 3,
+/* Texture index per quad (3 sets x 20): set = road type % 3,
  * entry = (quad-in-block % 10) + (quad nearer than ROAD_NEAR_Z ? 0 : 10). */
 static const int ROAD_TEX_SET[3][20] = {
     { 0,10, 1,11, 2,12, 3,13, 4,14, 5,15, 6,16, 7,17, 8,18, 9,19 },
     {20,21,22,23,24,20,21,22,23,24,20,21,22,23,24,20,21,22,23,24 },
     {25,26,27,28,29,25,26,27,28,29,25,26,27,28,29,25,26,27,28,29 },
 };
-#define ROAD_NEAR_Z   60.0f    /* 0x004c4f6c: camera depth of the quad centre     */
-#define ROAD_FAR_Z   450.0f    /* 0x004c4f68: quads beyond are not drawn (legacy) */
+#define ROAD_NEAR_Z   60.0f    /* camera depth of the quad centre                 */
+#define ROAD_FAR_Z   450.0f    /* quads beyond are not drawn (legacy)             */
 #define ROAD_SW_LIFT  0.05f    /* software path only (no depth bias there)        */
 
 typedef struct {
@@ -426,7 +425,7 @@ static void road_tri_clip(const Scene *s, float hscale, int step, float lift,
         }
 }
 
-/* Split one road (RSEG) into the original's blocks (RSEG_loader FUN_004b4370):
+/* Split one road (RSEG) into the original's blocks:
  * `per` = quad count halved (rounding up) until <= 24; full blocks of `per`
  * quads while more than 4 quads remain after them, then one last block with
  * the rest (only if it has more than 1 quad). Calls fn(first_rib, quads). */
@@ -463,8 +462,8 @@ static void road_block_cb(void *ud, int first, int quads)
         }
         const RoadRib *r0 = &b->s->road[b->base + first + k];
         const RoadRib *r1 = r0 + 1;
-        /* Polygon corners in the original's order (index table 0x00500618
-         * {1,0,2,3} over the rib verts A0,B0,A1,B1) with UVs from 0x005005e8:
+        /* Polygon corners in the original's order ({1,0,2,3} over the rib
+         * verts A0,B0,A1,B1) with its UVs:
          * B_i (0,0), A_i (1,0), A_i+1 (1,1), B_i+1 (0,1): one texture repeat
          * per quad, u across, v along. */
         float P[4][5] = {
@@ -480,8 +479,7 @@ static void road_block_cb(void *ud, int first, int quads)
         q->centre[2] = (r0->rz + r1->lz) * 0.5f;
         q->centre[1] = (sample_terrain_y(b->s, r0->rx, r0->rz, b->hscale) +
                         sample_terrain_y(b->s, r1->lx, r1->lz, b->hscale)) * 0.5f;
-        /* The original rasterises the 4-vertex polygon; split it as a fan from
-         * its first vertex (B_i) ??? (the span rasteriser's split not read). */
+        /* Split the 4-vertex polygon as a fan from its first vertex (B_i). */
         float t0[3][5], t1[3][5];
         memcpy(t0[0], P[0], sizeof P[0]); memcpy(t0[1], P[1], sizeof P[0]); memcpy(t0[2], P[2], sizeof P[0]);
         memcpy(t1[0], P[0], sizeof P[0]); memcpy(t1[1], P[2], sizeof P[0]); memcpy(t1[2], P[3], sizeof P[0]);
@@ -525,7 +523,7 @@ static void free_road_quads(RoadQuad *q, int n)
     free(q);
 }
 
-/* Per frame, as the original's road draw (FUN_00494420): the quad centre's
+/* Per frame, as the original's road draw: the quad centre's
  * camera depth picks the near (< 60) or far texture. The original also skips
  * quads deeper than 450; that cut is kept for --legacy only, because our view
  * distance is longer than the original's (docs/DEVIATIONS.md). Returns the
@@ -903,9 +901,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
     VehicleModel *veh = vehicle_load_vcf("vdstag1.vcf");   /* vdstag.vdf + stag1.vtf */
 
     /* Terrain — both representations, rebuilt when the height scale changes. */
-    /* The real vertical scale is now known (TERRAIN_Y_SCALE = 0.1 on the 12-bit
-     * height; nitro.exe terrain_height_sample / FUN_004953e0). HS is a debug
-     * multiplier on top — 1.0 is exact; P cycles it to eyeball the result. */
+    /* HS is a debug multiplier on TERRAIN_Y_SCALE: 1.0 is exact; P cycles it. */
     static const float HS[] = { 1.0f, 0.85f, 1.25f, 1.5f, 0.5f };
     int hs_idx = 0;
     float      **ter_cpu = calloc((size_t)scene->patch_count + 1, sizeof(*ter_cpu));
@@ -1187,7 +1183,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
             car.yaw = atan2f(sim.axes[2][0], sim.axes[2][2]);
             veh_t[0] = car.x; veh_t[1] = car.y; veh_t[2] = car.z;
 
-            /* The original external track camera (view 0x0f, FUN_00435330),
+            /* The original external track camera,
              * aimed at the car's bbox centre, driven by track_* bindings. */
             float lookat[3];
             mat3_vec(car.R, car_centre, lookat);

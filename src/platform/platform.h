@@ -4,26 +4,9 @@
 /*
  * platform.h — Platform Hardware Abstraction Layer
  *
- * WHAT THIS IS:
- *   Everything in this file maps to Win32 calls found in Fun_Real_Entry
- *   and the surrounding game code. The goal is that no file outside of
- *   src/platform/ ever calls SDL, Win32, or any OS API directly.
- *
- * ORIGINAL BINARY NOTES:
- *   - Window class name: "Interstate '76 Nitro Pack"  (s_Interstate_'76_Nitro_Pack_004f3618)
- *   - Single-instance guard via FindWindowA() at top of Fun_Real_Entry
- *   - WM_QUIT (0x12) was intercepted manually rather than via normal
- *     PostQuitMessage flow — sets DAT_00653c18=1, DAT_00526a44=wParam
- *   - Message pump pattern repeated 5+ times in Fun_Real_Entry alone —
- *     we unify that into platform_pump_events()
- *   - Process priority was toggled around AI computation:
- *     HIGH_PRIORITY_CLASS (0x100) during AI, NORMAL (0x20) after.
- *     On modern hardware this is irrelevant, stubbed out for now.
- *   - Window creation used WNDCLASSA with:
- *       style       = CS_HREDRAW|CS_VREDRAW (3)
- *       cbWndExtra  = 4
- *       hCursor     = IDC_ARROW (0x7F00)
- *       hbrBackground = GetStockObject(BLACK_BRUSH) (4)
+ * Every OS call goes through here: no file outside src/platform/ calls SDL
+ * or the OS directly. The original's Win32 details are in docs/REVERSING.md
+ * "Platform layer".
  */
 
 #include <stdbool.h>
@@ -87,8 +70,6 @@ typedef struct {
 /*
  * platform_init()
  *   Bring up the window and SDL subsystems.
- *   Mirrors RegisterClassA + CreateWindowA + ShowWindow sequence
- *   in Fun_Real_Entry around 0x004339a0.
  *
  *   title  — window title (original: "Interstate '76 Nitro Pack")
  *   width  — client area width  in pixels
@@ -108,10 +89,7 @@ bool platform_init(const char *title, int width, int height);
 
 /*
  * platform_shutdown()
- *   Tears down window and SDL. Mirrors the cleanup block in Fun_Real_Entry
- *   at the GS_QUIT / local_3c==-1 exit path:
- *     FUN_00484af0(&DAT_00653b40)  — destroy window
- *     FreeLibrary(DAT_00653f78)    — drop NITSHELL.DLL
+ *   Tears down the window and SDL.
  */
 void platform_shutdown(void);
 
@@ -127,11 +105,6 @@ void platform_shutdown(void);
  *
  *   Returns false if a quit event was received (caller should set
  *   g_gamestate = GS_QUIT).
- *
- *   Original: PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE) pattern,
- *   repeated at addresses: 0x00431xxx, 0x00432xxx, 0x00433xxx etc.
- *   The original explicitly checked message != WM_QUIT (0x12) before
- *   dispatching; we handle that here transparently.
  */
 bool platform_pump_events(PlatformEvent *evt);
 
@@ -150,10 +123,7 @@ bool platform_flush_events(void);
 
 /*
  * platform_get_ticks()
- *   Milliseconds since platform_init(). Used for the game timer
- *   referenced via FUN_004a2ce0() throughout Fun_Real_Entry —
- *   that function almost certainly wraps timeGetTime() or
- *   QueryPerformanceCounter().
+ *   Milliseconds since platform_init().
  */
 uint64_t platform_get_ticks(void);
 
@@ -170,11 +140,7 @@ void platform_sleep(uint32_t ms);
 
 /*
  * platform_valloc() / platform_vfree()
- *   Large virtual memory blocks. In the original:
- *     DAT_00653fa0 = FUN_004a3c00(0x1a5e0, 0x40000)  — ~107KB, 256KB reserved
- *     DAT_00653fa4 = FUN_004a3c00(0x80000, 0x80000)  — 512KB
- *   FUN_004a3c00 is almost certainly VirtualAlloc(NULL, reserve,
- *   MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE).
+ *   Large virtual memory blocks.
  *
  *   On Linux we use mmap(MAP_ANONYMOUS|MAP_PRIVATE).
  *   Returns NULL on failure (caller mirrors original fatal error path).

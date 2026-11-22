@@ -5,7 +5,7 @@
  * geomesh.h — Decoded OEG mesh
  *
  * The renderable form of an "OEG." geometry record, produced by geomesh_decode
- * from the (already decompressed) raw image that geo_build_mesh (FUN_0043aa60)
+ * from the (already decompressed) raw image that geo_build_mesh
  * consumes in the original. See docs/REVERSING.md "GEO/OEG mesh file format —
  * CONFIRMED & DECODED" for the byte layout. The decode here mirrors the
  * original's pointer arithmetic faithfully:
@@ -18,7 +18,7 @@
  *   0x20 u32  ?
  *   0x24 vec3f posA[nVerts]   (positions — what we render)
  *        vec3f norm[nVerts]   (unit vertex normals, stored INWARD-facing —
- *                              consumed by the lighting pass FUN_0046ff00)
+ *                              consumed by the lighting pass)
  *        faces[nFaces]: 0x37-byte header (+0x04 = nFaceVerts) then
  *                       nFaceVerts × 0x10-byte entries (+0x00 = vertex index)
  *

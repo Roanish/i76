@@ -9,8 +9,7 @@
 /*
  * lighting.h — per-mission global lighting from the original's time of day.
  *
- * Faithful inputs (nitro.exe sky_light_init FUN_0046f5d0, phase table
- * 0x004fb188 — see docs/REVERSING.md "Time of day + global lighting"):
+ * Faithful inputs (docs/REVERSING.md "Time of day + global lighting"):
  *   phase = ((hour + 2) % 24) * 8 / 24      (8 phases of 3 hours)
  *   per phase: sun or moon, angle about Z, intensity, ambient (always 0)
  *   light direction (toward the light) = (sin a, cos a, 0)

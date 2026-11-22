@@ -89,9 +89,10 @@ Unconfirmed reverse-engineering is marked `???` (see docs/REVERSING.md).
   mode.
 - **legacy: will be the current behaviour.**
 
-### World-viewer driving
-- `worldview.c car_tick` is a test harness, not the original vehicle simulation. It will be
-  replaced by the transcribed physics (docs/REVERSING.md "Vehicle physics — map").
+### Gameplay frame loop
+- `loop.c` is a placeholder with a fixed 60 Hz step. The original runs variable dt with
+  physics sub-steps (docs/REVERSING.md "Frame timer"); the world viewer already drives the
+  vehicle simulation that way. The loop is replaced when gameplay moves onto the simulation.
 - **legacy: n/a** (temporary).
 
 ### World-viewer keys

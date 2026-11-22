@@ -9,10 +9,10 @@
  * cache of decoded GEO meshes — NOT the live game-entity store.
  *
  * Original functions this mirrors:
- *   obj_system_init   (FUN_0043a6d0)  -> meshcache_init
- *   geo_cache_acquire (FUN_0043a770)  -> geo_cache_acquire
- *   geo_cache_release (FUN_0043a9a0)  -> geo_cache_release
- *   geo_build_mesh    (FUN_0043aa60)  -> (internal) decode + eviction
+ *   obj_system_init    -> meshcache_init
+ *   geo_cache_acquire  -> geo_cache_acquire
+ *   geo_cache_release  -> geo_cache_release
+ *   geo_build_mesh     -> (internal) decode + eviction
  *
  * WHAT IS CERTAIN (reversed, reproduced faithfully here):
  *   - 2029-bucket dual index: by name and by mesh-buffer pointer

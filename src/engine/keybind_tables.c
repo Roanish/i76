@@ -1,15 +1,14 @@
 /*
- * keybind_tables.c — GENERATED from nitro.exe data (do not hand-edit; see
- * docs/REVERSING.md "Input bindings"). Regenerate from the exe dumps.
+ * keybind_tables.c — GENERATED from the original's data tables (do not
+ * hand-edit; see docs/REVERSING.md "Input bindings").
  *
- *   KB_CHANNELS: the keyboard driver's 125 channel names (table 0x004f70c8),
- *     channel index = set-1 scancode - 1, extended keys remapped to 93..102
- *     (FUN_00442db0). Paired with the USB-HID usage of the same physical key.
- *     "Grey*" = dedicated cursor block, plain arrows/Home/PgUp/Insert/... =
- *     numeric keypad. "Shift"/"Control" (118/119) are virtual: either side.
- *   KB_ACTIONS: the action table 0x004f3d10 (86 x 32 bytes):
- *     {name, var, type (0 axis, 1 button, 2 toggle), default, min, max, rate, flags}.
- *   KB_COMMANDS: the gamekey command table 0x004f47d0 {name, id}.
+ *   KB_CHANNELS: the keyboard driver's 125 channel names, paired with the
+ *     USB-HID usage of the same physical key. "Grey*" = dedicated cursor
+ *     block; plain arrows/Home/PgUp/Insert/... = numeric keypad.
+ *     "Shift"/"Control" (118/119) are virtual: either side.
+ *   KB_ACTIONS: {name, var, type (0 axis, 1 button, 2 toggle), default, min,
+ *     max, rate, flags}.
+ *   KB_COMMANDS: gamekey commands {name, id}.
  */
 #include "engine/keybind.h"
 

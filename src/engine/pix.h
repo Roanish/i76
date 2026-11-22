@@ -5,7 +5,7 @@
 
 /*
  * pix.h — global PIX/PAK record index (our reimplementation of the original's
- * pix_init (FUN_00467cd0) + vfs_lod_pak resolver).
+ * pix_init + vfs_lod_pak resolver).
  *
  * The original game indexes every record packed into the .pak archives through
  * a set of plain-text .pix files. Each ".pix" sits beside a ".pak" of the same

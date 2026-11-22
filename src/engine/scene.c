@@ -121,8 +121,8 @@ typedef struct {
 } Part;
 
 /* Compose a part's part-to-object transform by walking its parent chain.
- * Parent "WORLD" (case-insensitive) is the object root (identity). The original
- * parents parts via object_alloc (FUN_004b33a0); a child's +0x2c translation is
+ * Parent "WORLD" (case-insensitive) is the object root (identity). As in the
+ * original, a child's +0x2c translation is
  * expressed in its PARENT's frame, so we must chain, not place against the root. */
 static void resolve_part(Part *parts, int np, int i)
 {
@@ -167,18 +167,14 @@ static int expand_sdf(ItemVec *iv, const char *name,
     long pend   = sgeo + slen;
 
     /*
-     * SGEO is a fixed 6 groups (3 LOD x 2 variant) of `count` parts, each part a
-     * 0x78-byte record (confirmed: SGEO handler FUN_004b3be0 builds 6 group ptrs;
-     * model builder FUN_004b33a0 iterates 3x2xcount). The original creates one
-     * part-OBJECT per slot from group 0 and reuses it across LOD/variant groups,
-     * which only swap the mesh. Each part record carries a PARENT name at +0x38
-     * ("WORLD" = object root, else a sibling part); its +0x08 3x3 / +0x2c
-     * translation are RELATIVE TO THAT PARENT, and object_alloc links them into a
-     * hierarchy. We mirror that: group 0 is the canonical part list, pick the
-     * highest-detail mesh per slot across the 6 groups, then compose each part up
-     * its parent chain. (Placing every part against the object root — ignoring
-     * the chain — was the old bug: deck parts parented to the SPN span were drawn
-     * at the root, throwing the span and deck apart.)
+     * SGEO is a fixed 6 groups (3 LOD x 2 variant) of `count` parts, each a
+     * 0x78-byte record. The original creates one part object per slot from
+     * group 0 and reuses it across the LOD/variant groups, which only swap the
+     * mesh. Each record carries a parent name at +0x38 ("WORLD" = object root,
+     * else a sibling part); its +0x08 3x3 / +0x2c translation are relative to
+     * that parent. We mirror that: group 0 is the canonical part list, pick the
+     * highest-detail mesh per slot across the 6 groups, then compose each part
+     * up its parent chain.
      */
     enum { MAX_PARTS = 64 };
     Part parts[MAX_PARTS];
@@ -326,7 +322,7 @@ static void load_world_textures(Scene *s, const uint8_t *d, long sz)
     snprintf(s->ground_tex,   sizeof s->ground_tex,   "%.12s", n + 6 * 13);
     snprintf(s->lum_name,     sizeof s->lum_name,     "%.12s", n + 1 * 13);
     snprintf(s->sky_tex,      sizeof s->sky_tex,      "%.12s", n + 4 * 13);
-    /* +0x9b: hour of day -> sky_light_init (FUN_0046f5d0), see
+    /* +0x9b: hour of day, see
      * docs/REVERSING.md "Time of day + global lighting". */
     if (wrld + 0x9b + 4 <= sz) s->hour = (int)rd_u32(d + wrld + 0x9b);
     if (wrld + 0x9f + 8 * 20 <= sz) {
@@ -346,10 +342,8 @@ static void load_world_textures(Scene *s, const uint8_t *d, long sz)
 
 /* Parse RDEF -> every RSEG: the road network. RSEG payload = [u32 type]
  * [u32 count][count x 24-byte ribs]; a rib is edgeA (x,y,z) +0x00/04/08 and
- * edgeB (x,y,z) +0x0c/10/14, with Y filled from the terrain at load time
- * (roads_drape_to_terrain FUN_00493cc0; RSEG_loader FUN_004b4370 keeps the
- * type and copies the ribs verbatim). ISEG/TSEG (junction pieces, shared
- * handler 0044dee0) are not decoded yet. See REVERSING.md "RDEF / road segments". */
+ * edgeB (x,y,z) +0x0c/10/14, with Y filled from the terrain at load time.
+ * ISEG/TSEG (junction pieces) are not decoded yet. See REVERSING.md "RDEF / road segments". */
 static void load_roads(Scene *s, const uint8_t *d, long sz)
 {
     long rdef = find_chunk(d, 0, sz, "RDEF");

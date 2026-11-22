@@ -9,8 +9,8 @@
 /*
  * keybind.h — the original game's input binding system, reproduced.
  *
- * Reads the two config files the original reads (nitro.exe, see
- * docs/REVERSING.md "Input bindings"):
+ * Reads the two config files the original reads (docs/REVERSING.md
+ * "Input bindings"):
  *   input.map   — held actions: `action { + keyboard Key  - keyboard Shift ... }`
  *                 (+ = key must be held, - = must NOT be held; a block is one
  *                 chord, several blocks per action OR together)
@@ -18,7 +18,7 @@
  *
  * Actions come from the original action table (keybind_tables.c). Axis
  * actions (type 0) bound through X_plus / X_minus buttons are integrated per
- * frame exactly like the original's analog sink stepper (FUN_00441110):
+ * frame exactly like the original's analog sink stepper:
  * 16.16 value in [-1,1], velocity += 3*ftol(dt*182) << rate (cap 0x5555),
  * "_delta" axes alias velocity and value (they snap back to 0 on release),
  * output = integer in [min, max].

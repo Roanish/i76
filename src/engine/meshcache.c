@@ -215,7 +215,7 @@ static void default_free(void *buf)
 }
 
 /*
- * geo_build_mesh (FUN_0043aa60) — decode a raw GEO image into a renderable
+ * geo_build_mesh — decode a raw GEO image into a renderable
  * mesh. Now uses the real OEG decoder (geomesh_decode); the cached buffer is a
  * GeoMesh*. Budget accounting uses the source image size (the original tracked
  * the decoded HeapSize; our explicit byte budget is already an approximation

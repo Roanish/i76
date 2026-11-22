@@ -1,7 +1,7 @@
 /*
  * geomesh.c — OEG mesh decode (see geomesh.h)
  *
- * Faithful transcription of geo_build_mesh's (FUN_0043aa60) input parse, run on
+ * Faithful transcription of geo_build_mesh's input parse, run on
  * the decompressed OEG image. We extract positions (vertex array A) and the
  * per-face vertex-index lists — enough to render. The second vertex array and
  * the per-face texture/UV data are parsed-over but not yet stored (TODO when

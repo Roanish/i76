@@ -8,13 +8,9 @@
  *   factor (alpha). This keeps the simulation deterministic and frame-rate
  *   independent while still drawing smoothly at the display's rate.
  *
- * ORIGINAL BINARY:
- *   The hot loop is `while(DAT_004f30cc == 5)` in Fun_Real_Entry. Per
- *   REVERSING.md it pulls a time delta from FUN_004a2ce0 (returns seconds),
- *   prefetches the object pages (mem_prefetch_objects), pumps Win32 messages,
- *   updates, and presents. We reproduce that shape: time delta → input →
- *   fixed update(s) → render. FUN_004a2ce0's exact unit is still being
- *   confirmed; we use platform_get_ticks() (milliseconds) as the source.
+ * Placeholder: the original runs variable dt with physics sub-steps
+ * (docs/REVERSING.md "Frame timer"); this loop is replaced when gameplay
+ * moves onto the vehicle simulation.
  */
 
 #include "loop.h"

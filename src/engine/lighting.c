@@ -8,10 +8,8 @@
 #include <math.h>
 #include <stdio.h>
 
-/* Phase table, verbatim from nitro.exe 0x004fb188 (0x14 bytes per entry:
- * day flag, celestial texture, angle, intensity, ambient). Angles are the
- * exact float bit patterns: 0x3f060a92, 0x3f9c61aa, 0x3fa78d36, 0x3f75be0b,
- * 0x3e32b8c2, 0x3f490fda. Ambient (+0x10) is 0 in every phase. */
+/* The original's phase table: day flag, celestial texture, angle, intensity,
+ * ambient. Ambient is 0 in every phase. */
 typedef struct { int day; const char *tex; float angle, intensity, ambient; } Phase;
 static const Phase PHASES[8] = {
     { 0, "nk_1mon1.map", 0.52359879f, 0.09375f, 0.0f },   /* 22-00 */
@@ -24,8 +22,7 @@ static const Phase PHASES[8] = {
     { 1, "nk_1sun1.map", 1.30899692f, 1.0f,     0.0f },   /* 19-21 */
 };
 
-/* Depth haze, verbatim (sky_light_init: DAT_00617ffc = 0x3f3fe4a6,
- * DAT_00618000 = 0x39dad16a; vertex_light clamps to [0.75, 1]). */
+/* Depth haze, the original's constants, clamped to [0.75, 1]. */
 #define HAZE_BASE  0.74958265f
 #define HAZE_SLOPE 0.00041735f
 #define HAZE_MIN   0.75f
@@ -33,7 +30,7 @@ static const Phase PHASES[8] = {
 /* .lum = 32 shade rows x 256-colour remap (rows 32+ are not shade rows).
  * Brightness response per row, per channel = mean colour of the remapped
  * palette over the mean of the base palette. The span stage picks the row as
- * (1 - I) * 31.5 (8064/256, FUN_00496a00), so row 0 = full light (~1.4x),
+ * (1 - I) * 31.5, so row 0 = full light (~1.4x),
  * row 31 = no light (~0.21x) — the original's non-linear response, as data. */
 static void measure_curve(const uint8_t *pal, const uint8_t *lum, size_t lum_size,
                           float curve[RENDER_LIGHT_ROWS][3])
@@ -71,8 +68,8 @@ void lighting_build(WorldLighting *o, int hour,
     o->body_tex  = p->tex;
 
     RenderLighting *g = &o->gpu;
-    /* Toward the light: row 1 of the quaternion rotation about Z by `angle`
-     * (sky_light_init + FUN_0049b480), used with the outward normal. */
+    /* Toward the light: row 1 of the rotation about Z by `angle`, used with
+     * the outward normal. */
     g->light_dir[0] = sinf(p->angle);
     g->light_dir[1] = cosf(p->angle);
     g->light_dir[2] = 0.0f;

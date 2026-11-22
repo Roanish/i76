@@ -4,18 +4,10 @@
 /*
  * render.h — Render abstraction layer
  *
- * Replaces NITSHELL.DLL from the original binary.
+ * Replaces the original's renderer DLL (NITSHELL.DLL), which exported
+ * BeginFrame, EndFrame, SetPalette, Init and Flip.
  *
- * Original exported an opaque function-pointer table populated via
- * GetProcAddress after LoadLibraryA("NITSHELL.DLL"). The known slots were:
- *
- *   DAT_00653f3c  →  BeginFrame(surface*)
- *   DAT_00653f40  →  EndFrame(surface*)
- *   DAT_00653f48  →  SetPalette(surface*, palette*)
- *   DAT_00653f4c  →  Init(surface*, mode)
- *   DAT_00653f60  →  Flip(surface*)
- *
- * We replicate those roles here with a clean C interface. Backend is Vulkan
+ * Same roles, as a plain C interface. Backend is Vulkan
  * (render_vk.c); D3D12 would be a second implementation of this header.
  *
  * Rendering model:
@@ -56,7 +48,6 @@ bool render_init(void);
 /*
  * render_shutdown()
  *   Destroy all Vulkan objects in reverse-creation order.
- *   Mirrors the original's FUN_0046dc10 + FreeLibrary(NITSHELL) sequence.
  */
 void render_shutdown(void);
 
@@ -67,14 +58,13 @@ void render_shutdown(void);
 /*
  * render_begin_frame()
  *   Acquire the next swapchain image, wait on its in-flight fence.
- *   Call once at the top of the game loop — mirrors DAT_00653f3c (BeginFrame).
+ *   Call once at the top of the game loop.
  */
 void render_begin_frame(void);
 
 /*
  * render_end_frame()
  *   Record + submit the command buffer, present the image.
- *   Mirrors DAT_00653f40 (EndFrame) + DAT_00653f60 (Flip).
  */
 void render_end_frame(void);
 
@@ -85,7 +75,6 @@ void render_end_frame(void);
 /*
  * render_set_palette()
  *   Upload 256 RGB entries to the GPU palette UBO.
- *   Mirrors DAT_00653f48 (SetPalette).
  *   Safe to call every frame; the copy is a 4 KB memcpy to a mapped buffer.
  */
 void render_set_palette(const Rgb8 *palette_256);
@@ -168,8 +157,8 @@ void render_3d_draw_decal(const RenderMesh *m, const float model[16],
                           const RenderTexture *tex);
 
 /*
- * Global (directional) lighting for the 3D pass, per pixel — the original's
- * model (nitro.exe vertex_light FUN_0046ff00 / terrain FUN_00495f80):
+ * Global (directional) lighting for the 3D pass, per pixel, using the
+ * original's model:
  *   I    = min(1, intensity * max(0, N.L) * haze(depth) + ambient)
  *   haze = clamp(haze_base + haze_slope * depth, haze_min, 1)   (view depth)
  *   row  = (1 - I) * 31.5                     (span stage, 8064/256)

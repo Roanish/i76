@@ -7,11 +7,10 @@
  * vehicle.h — a vehicle chassis model loaded from a .vdf's VGEO part grid.
  *
  * The VGEO chunk holds 28 groups (7 damage states x 4 LODs) of 0x64-byte part
- * records (the standard object_alloc record: name/3x3/pos/parent/type). We load
+ * records (the standard object record: name/3x3/pos/parent/type). We load
  * group (0,0) — pristine, highest LOD — compose each part's parent chain, and
  * acquire its "<name>.geo" mesh (a standard OEG pak record) via the mesh cache.
- * See docs/REVERSING.md "VDF vehicle definition" (vgeo_load FUN_004b90b0,
- * vdf_parts_build FUN_004b3140).
+ * See docs/REVERSING.md "VDF vehicle definition".
  *
  * Parts are returned as SceneItems whose R/t are VEHICLE-ROOT-relative; the
  * caller composes them with the vehicle's world transform each frame. Records
@@ -22,8 +21,8 @@
  * Skin binding: faces on a vehicle part name PLACEHOLDER textures ("V1 FT RT.MAP",
  * "V1 BO DY.MAP", ...). The skin .vtf maps each placeholder, per part model
  * slot, to a real texture name (a .tmt name table or a .map). Mirrors the
- * original's per-model override table (FUN_0043c460, keyed by model+name) as
- * filled by the in-game VTFC handler (FUN_004ba600). part_slot < 0 = any part.
+ * original's per-model texture override table, keyed by model + name.
+ * part_slot < 0 = any part.
  */
 typedef struct {
     int  part_slot;          /* VEH_SLOT_* or -1 (all parts: "V1 BO DY")  */
@@ -31,7 +30,7 @@ typedef struct {
     char real[16];           /* e.g. "1ds1FTRT.TMT"                       */
 } VehicleSkinBind;
 
-/* Part model slots (vgeo_part_register FUN_004b8ff0: part type -> slot). */
+/* Part model slots (part type -> slot). */
 enum { VEH_SLOT_FT, VEH_SLOT_MD, VEH_SLOT_BK, VEH_SLOT_TP, VEH_SLOT_FB, VEH_SLOT_BB,
        VEH_SLOT_COUNT };
 

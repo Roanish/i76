@@ -1,24 +1,23 @@
 /*
  * main.c — Application entry point and outer game loop
  *
- * Mirrors Fun_Real_Entry (WinMain at 0x00431760) from the original binary.
+ * Follows the original's WinMain startup order (docs/REVERSING.md "Entry Points").
  *
  * Startup sequence implemented so far:
  *   cmdline_parse()        cmdline equivalent
  *   fs_set_root()          asset path from --assets or "."
  *   vfs_init()             parse nitro.zix, lazy-open ZFS sources
- *   srand(time(NULL))      confirmed in Fun_Real_Entry
- *   platform_init()        RegisterClassA + CreateWindowA + ShowWindow
- *   render_init()          LoadLibraryA("NITSHELL.DLL") + Init(surface,mode)
- *   pool alloc             FUN_004a3c00 × 2
+ *   srand(time(NULL))
+ *   platform_init()        window
+ *   render_init()          renderer
+ *   pool alloc             two memory pools
  *   pcx load screen        addon/loadgame.pcx
  *
  * Still stubbed:
- *   StrLookup / lang.txt   (StrLookupCreate)
- *   Single-instance guard  (FindWindowA)
- *   Smacker intro/credits  (introf01.smk, credf01.smk) — non-goal for now
- *   Audio init             (audio_load_dat / engsnd.dat)
- *   The actual session runner (FUN_00430eb0)
+ *   String table / lang.txt
+ *   Single-instance guard
+ *   Audio init (engsnd.dat)
+ *   The session runner
  */
 
 #include <stdio.h>
@@ -157,7 +156,7 @@ int main(int argc, char *argv[])
 
     /* -------------------------------------------------------------- */
     /* RNG seed                                                         */
-    /* Confirmed in Fun_Real_Entry: srand(time(NULL)) before init.     */
+    /* Seeded before init, as the original.                            */
     /* -------------------------------------------------------------- */
 
     srand((unsigned int)time(NULL));
@@ -183,9 +182,7 @@ int main(int argc, char *argv[])
     }
 
     /* -------------------------------------------------------------- */
-    /* Virtual memory pools                                             */
-    /*   DAT_00653fa0 = FUN_004a3c00(0x1a5e0, 0x40000) primary pool   */
-    /*   DAT_00653fa4 = FUN_004a3c00(0x80000, 0x80000) secondary pool  */
+    /* Memory pools, sized as the original's                          */
     /* -------------------------------------------------------------- */
 
     void *pool_primary   = platform_valloc(0x40000);
@@ -199,8 +196,6 @@ int main(int argc, char *argv[])
 
     /* -------------------------------------------------------------- */
     /* Intro + credits videos                                           */
-    /* Original: video_play(hwnd, "introf01.smk") then                 */
-    /*           video_play(hwnd, "credf01.smk") before main loop.     */
     /* Any keypress skips. Not found = silently continue.              */
     /* -------------------------------------------------------------- */
 
@@ -211,7 +206,6 @@ int main(int argc, char *argv[])
 
     /* -------------------------------------------------------------- */
     /* Loading screen                                                   */
-    /* Original: FUN_00471000(path, dest_surface) after valloc.        */
     /* -------------------------------------------------------------- */
 
     {
@@ -230,7 +224,6 @@ int main(int argc, char *argv[])
 
     /* -------------------------------------------------------------- */
     /* Outer game loop                                                  */
-    /* Original: do { local_3c = FUN_00430eb0(...); ... } while(true)  */
     /*                                                                  */
     /* Each top-level state owns its own inner frame loop (mirroring    */
     /* the original, where every game state ran its own while() with    */
@@ -299,7 +292,7 @@ static void state_frontend_update(void)
 {
     /*
      * Stub: bypass NITSHELL entirely and drop straight into gameplay.
-     * In the original, GS_FRONTEND causes Fun_Real_Entry's outer loop
+     * In the original, GS_FRONTEND causes the outer loop
      * to call game_session_run() which runs ShellMain for the menu.
      * We skip all that and pretend the player already picked a scenario.
      *
