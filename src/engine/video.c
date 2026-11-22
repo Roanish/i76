@@ -10,6 +10,8 @@
 
 #include "video.h"
 #include "fs.h"
+#include "font.h"
+#include "fidelity.h"
 #include "../render/render.h"
 #include "../platform/platform.h"
 
@@ -17,6 +19,21 @@
 #include <SDL2/SDL.h>
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define SKIP_HINT "Press space to skip"
+
+/* Brightest palette entry, so the hint stays readable whatever the palette. */
+static uint8_t brightest(const unsigned char *pal)
+{
+    int best = 0, best_l = -1;
+    for (int i = 0; i < 256; i++) {
+        int l = pal[i*3] * 3 + pal[i*3+1] * 6 + pal[i*3+2];
+        if (l > best_l) { best_l = l; best = i; }
+    }
+    return (uint8_t)best;
+}
 
 bool video_play(const char *path)
 {
@@ -98,6 +115,10 @@ bool video_play(const char *path)
 
     bool skipped = false;
 
+    /* Skip hint, drawn over a copy of each frame (not in the original). */
+    Font    *font  = fidelity_legacy() ? NULL : font_load("base6x7.fnt");
+    uint8_t *frame = font ? malloc((size_t)w * blit_h) : NULL;
+
     while (ret == SMK_MORE || ret == SMK_LAST) {
 
         uint64_t frame_start = platform_get_ticks();
@@ -120,7 +141,16 @@ bool video_play(const char *path)
         if (palette && pixels) {
             render_begin_frame();
             render_set_palette((const Rgb8 *)palette);
-            render_blit_indexed(pixels, (uint32_t)w, blit_h);
+            const unsigned char *shown = pixels;
+            if (frame) {
+                memcpy(frame, pixels, (size_t)w * blit_h);
+                int tx = (int)w - font_text_width(font, SKIP_HINT) - 8;
+                int ty = (int)blit_h - (int)font->height - 4;
+                font_draw(font, SKIP_HINT, frame, (int)w, (int)blit_h,
+                          tx, ty, brightest(palette));
+                shown = frame;
+            }
+            render_blit_indexed(shown, (uint32_t)w, blit_h);
             render_end_frame();
         }
 
@@ -152,6 +182,9 @@ bool video_play(const char *path)
         }
         SDL_CloseAudioDevice(audio_dev);
     }
+
+    free(frame);
+    if (font) font_free(font);
 
     smk_close(s);
 
