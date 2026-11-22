@@ -331,36 +331,61 @@ static void load_world_textures(Scene *s, const uint8_t *d, long sz)
             s->palette_name, s->lum_name, s->ground_tex, s->sky_tex, s->hour);
 }
 
-/* Parse RDEF -> RSEG: the road network. RSEG payload = [u32 ?][u32 count] then
- * `count` 24-byte ribs. Each rib is TWO edge points, X/Y/Z each: edgeA at
- * +0x00/+04/+08, edgeB at +0x0c/+10/+14 (confirmed from roads_drape FUN_00493cc0,
- * which reads edgeA.X@+0,Z@+8 / edgeB.X@+0xc,Z@+0x14 and fills Y@+4/+0x10 by
- * terrain draping). The +0x04/+0x10 Y slots are scratch on disk. RSEG loader
- * FUN_004b4370 copies the ribs verbatim. See REVERSING.md "RDEF / road segments". */
+/* Parse RDEF -> every RSEG: the road network. RSEG payload = [u32 type]
+ * [u32 count][count x 24-byte ribs]; a rib is edgeA (x,y,z) +0x00/04/08 and
+ * edgeB (x,y,z) +0x0c/10/14, with Y filled from the terrain at load time
+ * (roads_drape_to_terrain FUN_00493cc0; RSEG_loader FUN_004b4370 keeps the
+ * type and copies the ribs verbatim). ISEG/TSEG (junction pieces, shared
+ * handler 0044dee0) are not decoded yet. See REVERSING.md "RDEF / road segments". */
 static void load_roads(Scene *s, const uint8_t *d, long sz)
 {
     long rdef = find_chunk(d, 0, sz, "RDEF");
     if (rdef < 0) return;
-    uint32_t rlen = rd_u32(d + rdef + 4);
-    long rseg = find_chunk(d, rdef + 8, rdef + (long)rlen, "RSEG");
-    if (rseg < 0) return;
+    long end = rdef + (long)rd_u32(d + rdef + 4);
+    if (end > sz) end = sz;
 
-    long p = rseg + 8;                       /* chunk payload */
-    uint32_t count = rd_u32(d + p + 4);      /* +0 = ?, +4 = rib count */
-    long recs = p + 8;
-    if (count == 0 || count > 200000) return;
-    if (recs + (long)count * 24 > sz) return;
-
-    s->road = malloc(sizeof(RoadRib) * count);
-    s->road_count = (int)count;
-    for (uint32_t i = 0; i < count; i++) {
-        const uint8_t *r = d + recs + (size_t)i * 24;
-        s->road[i].lx = rd_f32(r + 0x00);   /* edgeA.X */
-        s->road[i].lz = rd_f32(r + 0x08);   /* edgeA.Z */
-        s->road[i].rx = rd_f32(r + 0x0c);   /* edgeB.X */
-        s->road[i].rz = rd_f32(r + 0x14);   /* edgeB.Z */
+    /* Two passes: count, then fill. */
+    int nseg = 0; long nrib = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        int si = 0; long ri = 0;
+        for (long o = rdef + 8; o + 8 <= end; ) {
+            uint32_t len = rd_u32(d + o + 4);
+            if (len < 8) break;
+            if (memcmp(d + o, "RSEG", 4) == 0 && o + 16 <= end) {
+                uint32_t type  = rd_u32(d + o + 8);
+                uint32_t count = rd_u32(d + o + 12);
+                long recs = o + 16;
+                if (count > 0 && count <= 200000 && recs + (long)count * 24 <= o + (long)len) {
+                    if (pass == 1) {
+                        s->road_segs[si] = (RoadSeg){ (int)type, (int)ri, (int)count };
+                        for (uint32_t k = 0; k < count; k++) {
+                            const uint8_t *r = d + recs + (size_t)k * 24;
+                            s->road[ri + k].lx = rd_f32(r + 0x00);   /* edgeA.X */
+                            s->road[ri + k].lz = rd_f32(r + 0x08);   /* edgeA.Z */
+                            s->road[ri + k].rx = rd_f32(r + 0x0c);   /* edgeB.X */
+                            s->road[ri + k].rz = rd_f32(r + 0x14);   /* edgeB.Z */
+                        }
+                    }
+                    si++; ri += count;
+                }
+            }
+            o += len;
+        }
+        if (pass == 0) {
+            nseg = si; nrib = ri;
+            if (nseg == 0) return;
+            s->road_segs = malloc(sizeof(RoadSeg) * (size_t)nseg);
+            s->road      = malloc(sizeof(RoadRib) * (size_t)nrib);
+            if (!s->road_segs || !s->road) {
+                free(s->road_segs); free(s->road);
+                s->road_segs = NULL; s->road = NULL;
+                return;
+            }
+        }
     }
-    fprintf(stderr, "[scene] roads: %d ribs\n", s->road_count);
+    s->road_seg_count = nseg;
+    s->road_count     = (int)nrib;
+    fprintf(stderr, "[scene] roads: %d segment(s), %d ribs\n", nseg, s->road_count);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -485,6 +510,7 @@ void scene_free(Scene *s)
         free(s->patches[i].heights);
     free(s->patches);
     free(s->road);
+    free(s->road_segs);
     free(s->items);
     free(s);
 }

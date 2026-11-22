@@ -53,13 +53,22 @@ typedef struct {
     float rx, rz;   /* edgeB (rib +0x0c X, +0x14 Z) */
 } RoadRib;
 
+/* One RSEG chunk = one road: payload +0x00 type (selects the texture set,
+ * type % 3), +0x04 rib count, ribs from +0x08 (RSEG_loader FUN_004b4370). */
+typedef struct {
+    int type;
+    int first, count;   /* range in Scene.road */
+} RoadSeg;
+
 typedef struct {
     SceneItem    *items;
     int           count;
     TerrainPatch *patches;
     int           patch_count;
-    RoadRib      *road;        /* RSEG road ribs (NULL if none)             */
+    RoadRib      *road;        /* every RSEG's ribs, concatenated (NULL if none) */
     int           road_count;
+    RoadSeg      *road_segs;   /* one per RSEG chunk, in file order          */
+    int           road_seg_count;
     float         center[3];  /* scene centroid (camera target)            */
     float         radius;     /* bounding radius about center              */
     /* WDEF->WRLD terrain texture set (empty if the mission has no WDEF). */

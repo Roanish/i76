@@ -28,6 +28,7 @@
 #include "engine/trackcam.h"     /* original external track camera (view 0x0f) */
 #include "engine/pix.h"          /* vfs_lod (.lum: lighting is not moddable) */
 #include "engine/texture.h"
+#include "engine/fidelity.h"      /* --legacy: faithful paths */
 #include "render/render.h"
 #include "render/softraster.h"
 
@@ -98,12 +99,22 @@ static void mat_lookat_up(float m[16], const float eye[3], const float fwd[3], c
 
 
 /* SceneItem world transform (R row-major 3x3 + t) -> column-major model mat4. */
-static void item_model(float m[16], const float R[9], const float t[3])
+/* Model matrix drawn CAMERA-RELATIVE (hardware path): translation = t - eye,
+ * subtracted in double so the GPU only sees small numbers. Mission
+ * coordinates reach ~49000, where a float resolves only ~4 mm; transforming
+ * absolute positions on the GPU made coplanar road/terrain fight near the
+ * camera. The view matrix is built with the eye at the origin. */
+static void rel_model(float m[16], const float R[9], const float t[3], const float eye[3])
 {
+    static const float I3[9] = { 1,0,0, 0,1,0, 0,0,1 };
+    if (!R) R = I3;
     m[0]=R[0]; m[1]=R[3]; m[2] =R[6]; m[3]=0;
     m[4]=R[1]; m[5]=R[4]; m[6] =R[7]; m[7]=0;
     m[8]=R[2]; m[9]=R[5]; m[10]=R[8]; m[11]=0;
-    m[12]=t[0]; m[13]=t[1]; m[14]=t[2]; m[15]=1;
+    m[12]=(float)((double)t[0] - (double)eye[0]);
+    m[13]=(float)((double)t[1] - (double)eye[1]);
+    m[14]=(float)((double)t[2] - (double)eye[2]);
+    m[15]=1;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -138,17 +149,6 @@ static float cell_h12(const Scene *s, long gx, long gz)
 
 static float sample_terrain_y(const Scene *s, float x, float z, float hscale);
 
-/* Outward terrain normal at world (x,z): central differences of the faithful
- * bilinear height sampler, one fine cell apart. */
-static void terrain_normal_at(const Scene *s, float x, float z, float hscale, float n[3])
-{
-    float d = s->patch_count ? s->patches[0].cell : 5.0f;
-    float dydx = (sample_terrain_y(s, x + d, z, hscale) - sample_terrain_y(s, x - d, z, hscale)) / (2.0f * d);
-    float dydz = (sample_terrain_y(s, x, z + d, hscale) - sample_terrain_y(s, x, z - d, hscale)) / (2.0f * d);
-    float l = sqrtf(dydx * dydx + 1.0f + dydz * dydz);
-    n[0] = -dydx / l; n[1] = 1.0f / l; n[2] = -dydz / l;
-}
-
 /* Outward terrain normal at GLOBAL grid point (gx,gz), exactly as the
  * original's D3D terrain path (FUN_00495f80): central differences of the
  * 12-bit heights one cell either side, scaled 0.1/cell, n = (-dx, 1, -dz)
@@ -174,8 +174,12 @@ static void terrain_grid_normal(const Scene *s, long gx, long gz, float hscale, 
  * uses step 1 (full resolution, as the original); the software path uses
  * TERRAIN_STEP to stay fast. */
 static float *build_terrain_verts(const Scene *s, const TerrainPatch *p,
-                                  float hscale, int step, uint32_t *out_count)
+                                  float hscale, int step, int patch_local,
+                                  uint32_t *out_count)
 {
+    /* patch_local: positions relative to the patch origin (hardware path,
+     * drawn camera-relative); otherwise world positions (software path). */
+    float ox = patch_local ? p->origin[0] : 0.0f, oz = patch_local ? p->origin[1] : 0.0f;
     int n = p->dim;
     long c0 = lroundf(p->origin[0] / p->cell);
     long r0 = lroundf(p->origin[1] / p->cell);
@@ -210,7 +214,7 @@ static float *build_terrain_verts(const Scene *s, const TerrainPatch *p,
                 const float *a = c[quad[t]];
                 float nrm[3];
                 terrain_grid_normal(s, g[quad[t]][0], g[quad[t]][1], hscale, nrm);
-                *w++ = a[0]; *w++ = a[1]; *w++ = a[2];
+                *w++ = a[0] - ox; *w++ = a[1]; *w++ = a[2] - oz;
                 *w++ = a[0] / TERRAIN_TILE; *w++ = a[2] / TERRAIN_TILE;
                 *w++ = nrm[0]; *w++ = nrm[1]; *w++ = nrm[2];
             }
@@ -250,44 +254,272 @@ static float terrain_ground_cb(void *ud, float x, float z)
     return sample_terrain_y(g->scene, x, z, g->hscale);
 }
 
-/* Build the road ribbon as a [px,py,pz, u,v] triangle soup, draped on terrain.
- * Consecutive ribs form quads; a large XZ jump (junction / loop seam) splits the
- * strip so no quad spans the gap. Roads lift slightly above the ground. */
-#define ROAD_Y_OFFSET 0.6f
-#define ROAD_BREAK    60.0f
-#define ROAD_TILE     16.0f   /* world units per road-texture repeat along length */
-
-static float *build_road_verts(const Scene *s, float hscale, uint32_t *out_count)
+/* Height on terrain mesh triangle `h` (0: corners 00,10,11; 1: 00,11,01) of
+ * the `step`-cell quad (cx,cz), at local (tx,tz) — the triangle's own plane,
+ * so a point on a shared edge gets the same height from either side. */
+static float terrain_tri_y(const Scene *s, long cx, long cz, int h, float tx, float tz,
+                           float hscale, int step)
 {
-    if (s->road_count < 2) return NULL;
-    float *v = malloc((size_t)s->road_count * 6 * MV * sizeof(float));
-    if (!v) return NULL;
-    float *w = v;
-    float ulen = 0.0f;
-    for (int i = 0; i + 1 < s->road_count; i++) {
-        const RoadRib *a = &s->road[i], *b = &s->road[i + 1];
-        float dx = b->lx - a->lx, dz = b->lz - a->lz;
-        float adv = sqrtf(dx*dx + dz*dz);
-        if (adv > ROAD_BREAK) { ulen = 0; continue; }
-        float al[3] = { a->lx, sample_terrain_y(s,a->lx,a->lz,hscale)+ROAD_Y_OFFSET, a->lz };
-        float ar[3] = { a->rx, sample_terrain_y(s,a->rx,a->rz,hscale)+ROAD_Y_OFFSET, a->rz };
-        float bl[3] = { b->lx, sample_terrain_y(s,b->lx,b->lz,hscale)+ROAD_Y_OFFSET, b->lz };
-        float br[3] = { b->rx, sample_terrain_y(s,b->rx,b->rz,hscale)+ROAD_Y_OFFSET, b->rz };
-        float u0 = ulen / ROAD_TILE, u1 = (ulen + adv) / ROAD_TILE;
-        ulen += adv;
-        float tri[6][5] = {
-            { al[0],al[1],al[2], u0,0 }, { ar[0],ar[1],ar[2], u0,1 }, { br[0],br[1],br[2], u1,1 },
-            { al[0],al[1],al[2], u0,0 }, { br[0],br[1],br[2], u1,1 }, { bl[0],bl[1],bl[2], u1,0 },
-        };
-        for (int k = 0; k < 6; k++) {
-            float nrm[3];
-            terrain_normal_at(s, tri[k][0], tri[k][2], hscale, nrm);   /* road lies on terrain */
-            for (int j = 0; j < 5; j++) *w++ = tri[k][j];
-            *w++ = nrm[0]; *w++ = nrm[1]; *w++ = nrm[2];
+    long gx = cx * step, gz = cz * step;
+    float h00 = cell_h12(s, gx, gz);
+    if (h00 < 0.0f) return 0.0f;
+    float h10 = cell_h12(s, gx + step, gz);        if (h10 < 0.0f) h10 = h00;
+    float h01 = cell_h12(s, gx, gz + step);        if (h01 < 0.0f) h01 = h00;
+    float h11 = cell_h12(s, gx + step, gz + step); if (h11 < 0.0f) h11 = h00;
+    float y = (h == 0) ? h00 + tx * (h10 - h00) + tz * (h11 - h10)
+                       : h00 + tz * (h01 - h00) + tx * (h11 - h01);
+    return y * (TERRAIN_Y_SCALE * hscale);
+}
+
+/* ----------------------------------------------------------------------- */
+/* Roads — the original's road polygons (docs/REVERSING.md "RDEF / road      */
+/* segments", "Frame timer + road height").                                 */
+/* ----------------------------------------------------------------------- */
+
+/* Default road textures (nitro.exe 0x00500628, 30 x name); a mission's
+ * "<mission>.rtm" replaces them line by line (roads_drape_to_terrain). */
+static const char *const ROAD_TEX_DEFAULT[30] = {
+    "r2anr_11.map","r2anr_21.map","r2anr_31.map","r2anr_41.map","r2anr_51.map",
+    "r2anr_61.map","r2anr_71.map","r2anr_81.map","r2anr_91.map","r2anr_01.map",
+    "r2ayr_11.map","r2ayr_21.map","r2ayr_31.map","r2ayr_41.map","r2ayr_51.map",
+    "r2ayr_61.map","r2ayr_71.map","r2ayr_81.map","r2ayr_91.map","r2ayr_01.map",
+    "r2dnr_17.map","r2dnr_27.map","r2dnr_37.map","r2dnr_47.map","r2dnr_57.map",
+    "r2wnr_19.map","r2wnr_29.map","r2wnr_39.map","r2wnr_49.map","r2wnr_59.map",
+};
+/* Texture index per quad (0x005006a0, 3 sets x 20): set = road type % 3,
+ * entry = (quad-in-block % 10) + (quad nearer than ROAD_NEAR_Z ? 0 : 10). */
+static const int ROAD_TEX_SET[3][20] = {
+    { 0,10, 1,11, 2,12, 3,13, 4,14, 5,15, 6,16, 7,17, 8,18, 9,19 },
+    {20,21,22,23,24,20,21,22,23,24,20,21,22,23,24,20,21,22,23,24 },
+    {25,26,27,28,29,25,26,27,28,29,25,26,27,28,29,25,26,27,28,29 },
+};
+#define ROAD_NEAR_Z   60.0f    /* 0x004c4f6c: camera depth of the quad centre     */
+#define ROAD_FAR_Z   450.0f    /* 0x004c4f68: quads beyond are not drawn (legacy) */
+#define ROAD_SW_LIFT  0.05f    /* software path only (no depth bias there)        */
+
+typedef struct {
+    float   *sw;  uint32_t sw_vc;    /* on the software path's step-2 terrain  */
+    float   *hw;  uint32_t hw_vc;    /* on the full-resolution terrain         */
+    RenderMesh *gpu;
+    int      tex[2];                 /* texture index: [0] near, [1] far       */
+    float    centre[3];              /* (edgeB_i + edgeA_i+1)/2, as the original */
+    float    org[2];                 /* hw verts are relative to (org[0], 0, org[1]) */
+} RoadQuad;
+
+/* Clip convex polygon `in` (XZ in [0],[2]) to the half-plane left of a->b
+ * (for a counter-clockwise clip triangle, in XZ). Points carry 5 floats:
+ * x, -, z, u, v. Returns the vertex count of `out`. */
+static int clip_half(const float (*in)[5], int n, const float *a, const float *b,
+                     float sign, float (*out)[5])
+{
+    int m = 0;
+    for (int k = 0; k < n; k++) {
+        const float *p = in[k], *q = in[(k + 1) % n];
+        float dp = sign * ((b[0]-a[0])*(p[2]-a[2]) - (b[2]-a[2])*(p[0]-a[0]));
+        float dq = sign * ((b[0]-a[0])*(q[2]-a[2]) - (b[2]-a[2])*(q[0]-a[0]));
+        if (dp >= 0) memcpy(out[m++], p, sizeof(float) * 5);
+        if ((dp >= 0) != (dq >= 0)) {
+            float t = dp / (dp - dq);
+            for (int j = 0; j < 5; j++) out[m][j] = p[j] + (q[j] - p[j]) * t;
+            m++;
         }
     }
-    *out_count = (uint32_t)(w - v) / MV;
-    return v;
+    return m;
+}
+
+/* Append triangle (x,z,u,v corners) clipped exactly to the terrain mesh
+ * triangles (`step`-cell quads split on the (0,0)-(1,1) diagonal, as
+ * build_terrain_verts). Every output triangle lies in a terrain triangle's
+ * plane, so the road is coplanar with the ground it covers. */
+static void road_tri_clip(const Scene *s, float hscale, int step, float lift,
+                          const float org[2], const float tri[3][5],
+                          float **buf, size_t *used, size_t *cap)
+{
+    float q = s->patches[0].cell * (float)step;
+    float x0 = fminf(tri[0][0], fminf(tri[1][0], tri[2][0]));
+    float x1 = fmaxf(tri[0][0], fmaxf(tri[1][0], tri[2][0]));
+    float z0 = fminf(tri[0][2], fminf(tri[1][2], tri[2][2]));
+    float z1 = fmaxf(tri[0][2], fmaxf(tri[1][2], tri[2][2]));
+    float area = (tri[1][0]-tri[0][0])*(tri[2][2]-tri[0][2]) - (tri[1][2]-tri[0][2])*(tri[2][0]-tri[0][0]);
+    if (fabsf(area) < 1e-6f) return;
+    for (long cz = (long)floorf(z0 / q); cz * q < z1; cz++)
+        for (long cx = (long)floorf(x0 / q); cx * q < x1; cx++) {
+            float c00[3] = { cx*q, 0, cz*q },     c10[3] = { (cx+1)*q, 0, cz*q };
+            float c11[3] = { (cx+1)*q, 0, (cz+1)*q }, c01[3] = { cx*q, 0, (cz+1)*q };
+            const float *tt[2][3] = { { c00, c10, c11 }, { c00, c11, c01 } };
+            for (int h = 0; h < 2; h++) {
+                float A[12][5], B[12][5];
+                int n = 3;
+                memcpy(A, tri, sizeof(float) * 15);
+                const float *const *t = tt[h];
+                float tsign = ((t[1][0]-t[0][0])*(t[2][2]-t[0][2]) - (t[1][2]-t[0][2])*(t[2][0]-t[0][0])) > 0 ? 1.0f : -1.0f;
+                n = clip_half((const float (*)[5])A, n, t[0], t[1], tsign, B); if (n < 3) continue;
+                n = clip_half((const float (*)[5])B, n, t[1], t[2], tsign, A); if (n < 3) continue;
+                n = clip_half((const float (*)[5])A, n, t[2], t[0], tsign, B); if (n < 3) continue;
+                size_t need = *used + (size_t)(n - 2) * 3 * MV;
+                if (need > *cap) {
+                    size_t nc = *cap ? *cap * 2 : 4096;
+                    while (nc < need) nc *= 2;
+                    float *nb = realloc(*buf, nc * sizeof(float));
+                    if (!nb) return;
+                    *buf = nb; *cap = nc;
+                }
+                for (int k = 1; k + 1 < n; k++) {
+                    const float *v3[3] = { B[0], B[k], B[k+1] };
+                    for (int j = 0; j < 3; j++) {
+                        float *w = *buf + *used;
+                        float px = v3[j][0], pz = v3[j][2];
+                        w[0] = px - org[0];
+                        w[1] = terrain_tri_y(s, cx, cz, h, px / q - (float)cx, pz / q - (float)cz,
+                                             hscale, step) + lift;
+                        w[2] = pz - org[1];
+                        w[3] = v3[j][3]; w[4] = v3[j][4];
+                        w[5] = 0.0f; w[6] = 1.0f; w[7] = 0.0f;   /* lit as flat-up (L.y) */
+                        *used += MV;
+                    }
+                }
+            }
+        }
+}
+
+/* Split one road (RSEG) into the original's blocks (RSEG_loader FUN_004b4370):
+ * `per` = quad count halved (rounding up) until <= 24; full blocks of `per`
+ * quads while more than 4 quads remain after them, then one last block with
+ * the rest (only if it has more than 1 quad). Calls fn(first_rib, quads). */
+typedef void (*RoadBlockFn)(void *ud, int first, int quads);
+static void road_blocks(int ribs, RoadBlockFn fn, void *ud)
+{
+    int quads = ribs - 1;
+    if (quads < 1) return;
+    int per = quads;
+    while (per > 24) per = (per & 1) + (per >> 1);
+    int rem = quads - per, done = 0;
+    if (rem > 4) {
+        int left = rem;
+        do { fn(ud, done, per); done += per; left -= per; } while (left > 4);
+    }
+    int last = per + (rem - done);
+    if (last > 1) fn(ud, done, last);
+}
+
+typedef struct {
+    const Scene *s; float hscale; int type, base;
+    RoadQuad *q; int n, cap;
+} RoadBuild;
+
+static void road_block_cb(void *ud, int first, int quads)
+{
+    RoadBuild *b = ud;
+    for (int k = 0; k < quads; k++) {
+        if (b->n == b->cap) {
+            int nc = b->cap ? b->cap * 2 : 256;
+            RoadQuad *nq = realloc(b->q, sizeof(RoadQuad) * (size_t)nc);
+            if (!nq) return;
+            b->q = nq; b->cap = nc;
+        }
+        const RoadRib *r0 = &b->s->road[b->base + first + k];
+        const RoadRib *r1 = r0 + 1;
+        /* Polygon corners in the original's order (index table 0x00500618
+         * {1,0,2,3} over the rib verts A0,B0,A1,B1) with UVs from 0x005005e8:
+         * B_i (0,0), A_i (1,0), A_i+1 (1,1), B_i+1 (0,1): one texture repeat
+         * per quad, u across, v along. */
+        float P[4][5] = {
+            { r0->rx, 0, r0->rz, 0, 0 }, { r0->lx, 0, r0->lz, 1, 0 },
+            { r1->lx, 0, r1->lz, 1, 1 }, { r1->rx, 0, r1->rz, 0, 1 },
+        };
+        RoadQuad *q = &b->q[b->n++];
+        memset(q, 0, sizeof *q);
+        int set = ((b->type % 3) + 3) % 3, e = k % 10;
+        q->tex[0] = ROAD_TEX_SET[set][e];
+        q->tex[1] = ROAD_TEX_SET[set][e + 10];
+        q->centre[0] = (r0->rx + r1->lx) * 0.5f;
+        q->centre[2] = (r0->rz + r1->lz) * 0.5f;
+        q->centre[1] = (sample_terrain_y(b->s, r0->rx, r0->rz, b->hscale) +
+                        sample_terrain_y(b->s, r1->lx, r1->lz, b->hscale)) * 0.5f;
+        /* The original rasterises the 4-vertex polygon; split it as a fan from
+         * its first vertex (B_i) ??? (the span rasteriser's split not read). */
+        float t0[3][5], t1[3][5];
+        memcpy(t0[0], P[0], sizeof P[0]); memcpy(t0[1], P[1], sizeof P[0]); memcpy(t0[2], P[2], sizeof P[0]);
+        memcpy(t1[0], P[0], sizeof P[0]); memcpy(t1[1], P[2], sizeof P[0]); memcpy(t1[2], P[3], sizeof P[0]);
+        /* Hardware verts relative to a nearby origin (drawn camera-relative:
+         * world coordinates here are ~49000, where floats resolve only ~4 mm). */
+        q->org[0] = floorf(q->centre[0]); q->org[1] = floorf(q->centre[2]);
+        static const float zero[2] = { 0, 0 };
+        size_t used = 0, cap = 0; float *buf = NULL;
+        road_tri_clip(b->s, b->hscale, 1, 0.0f, q->org, (const float (*)[5])t0, &buf, &used, &cap);
+        road_tri_clip(b->s, b->hscale, 1, 0.0f, q->org, (const float (*)[5])t1, &buf, &used, &cap);
+        q->hw = buf; q->hw_vc = (uint32_t)(used / MV);
+        used = 0; cap = 0; buf = NULL;
+        road_tri_clip(b->s, b->hscale, TERRAIN_STEP, ROAD_SW_LIFT, zero, (const float (*)[5])t0, &buf, &used, &cap);
+        road_tri_clip(b->s, b->hscale, TERRAIN_STEP, ROAD_SW_LIFT, zero, (const float (*)[5])t1, &buf, &used, &cap);
+        q->sw = buf; q->sw_vc = (uint32_t)(used / MV);
+    }
+}
+
+static RoadQuad *build_road_quads(const Scene *s, float hscale, int *out_n)
+{
+    RoadBuild b = { s, hscale, 0, 0, NULL, 0, 0 };
+    *out_n = 0;
+    if (s->patch_count == 0) return NULL;
+    for (int i = 0; i < s->road_seg_count; i++) {
+        b.type = s->road_segs[i].type;
+        b.base = s->road_segs[i].first;
+        road_blocks(s->road_segs[i].count, road_block_cb, &b);
+    }
+    for (int i = 0; i < b.n; i++)
+        b.q[i].gpu = b.q[i].hw_vc ? render_mesh_create(b.q[i].hw, b.q[i].hw_vc) : NULL;
+    *out_n = b.n;
+    return b.q;
+}
+
+static void free_road_quads(RoadQuad *q, int n)
+{
+    for (int i = 0; i < n; i++) {
+        free(q[i].sw); free(q[i].hw);
+        if (q[i].gpu) render_mesh_destroy(q[i].gpu);
+    }
+    free(q);
+}
+
+/* Per frame, as the original's road draw (FUN_00494420): the quad centre's
+ * camera depth picks the near (< 60) or far texture. The original also skips
+ * quads deeper than 450; that cut is kept for --legacy only, because our view
+ * distance is longer than the original's (docs/DEVIATIONS.md). Returns the
+ * texture index, or -1 to skip the quad. */
+static int road_quad_tex(const RoadQuad *q, const float eye[3], const float fwd[3])
+{
+    float z = (q->centre[0] - eye[0]) * fwd[0] + (q->centre[1] - eye[1]) * fwd[1] +
+              (q->centre[2] - eye[2]) * fwd[2];
+    if (fidelity_legacy() && z > ROAD_FAR_Z) return -1;
+    return q->tex[z < ROAD_NEAR_Z ? 0 : 1];
+}
+
+/* Road texture names: defaults, then "<mission>.rtm" line by line (each name
+ * = the line's first 15 non-space chars; up to 30 lines). */
+static void road_texture_names(const char *mission_path, char names[30][16])
+{
+    for (int i = 0; i < 30; i++) snprintf(names[i], 16, "%s", ROAD_TEX_DEFAULT[i]);
+    const char *b = strrchr(mission_path, '/');
+    b = b ? b + 1 : mission_path;
+    char rtm[64];
+    snprintf(rtm, sizeof rtm, "%s", b);
+    char *dot = strrchr(rtm, '.');
+    if (dot) *dot = 0;
+    strncat(rtm, ".rtm", sizeof rtm - strlen(rtm) - 1);
+    size_t sz = 0;
+    uint8_t *d = vfs_read_file(rtm, &sz);
+    if (!d) return;
+    size_t o = 0;
+    for (int i = 0; i < 30 && o < sz; i++) {
+        int k = 0;
+        while (o < sz && d[o] != '\n' && d[o] != '\r' && d[o] != ' ' && d[o] != '\t' && k < 15)
+            names[i][k++] = (char)d[o++];
+        names[i][k] = 0;
+        while (o < sz && d[o] != '\n') o++;
+        if (o < sz) o++;
+    }
+    vfs_free(d);
+    fprintf(stdout, "[worldview] road textures from %s\n", rtm);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -719,9 +951,8 @@ void worldview_run(const char *mission_path, RenderMode mode)
     RenderMesh **ter_gpu = calloc((size_t)scene->patch_count + 1, sizeof(*ter_gpu));
     int terrain_dirty = 1;
     /* Road ribbon (drapes on terrain, so rebuilt with it on a height-scale change). */
-    float      *road_cpu = NULL;
-    uint32_t    road_vc  = 0;
-    RenderMesh *road_gpu = NULL;
+    RoadQuad   *roads   = NULL;   /* the original's road quads */
+    int         road_n  = 0;
 
     Font *font = font_load("base6x7.fnt");
     input_init();
@@ -758,8 +989,23 @@ void worldview_run(const char *mission_path, RenderMode mode)
         ? gpu_tex_for(s_terrain_tex) : gpu_tex_for_flat(s_terrain_idx);
 
     /* Road: flat dark asphalt for now (a road .map is a follow-up). */
+    /* Road textures: the original's 30 (or the mission's .rtm list). A
+     * missing one falls back to flat asphalt (the original aborts:
+     * "Road texture not found"). */
     uint8_t road_idx = nearest_index(pal_sw, 34, 34, 40);
-    const RenderTexture *road_render_tex = gpu_tex_for_flat(road_idx);
+    const RenderTexture *road_flat_gpu = gpu_tex_for_flat(road_idx);
+    const Texture       *road_tex[30];
+    const RenderTexture *road_gpu_tex[30];
+    {
+        char names[30][16];
+        road_texture_names(mission_path, names);
+        for (int i = 0; i < 30; i++) {
+            road_tex[i] = texture_get(names[i]);
+            if (road_tex[i] && !road_tex[i]->pixels) road_tex[i] = NULL;
+            if (!road_tex[i]) fprintf(stderr, "[worldview] road texture %s not found\n", names[i]);
+            road_gpu_tex[i] = road_tex[i] ? gpu_tex_for(road_tex[i]) : road_flat_gpu;
+        }
+    }
 
     /* Per-object meshes (deduped) → per-texture GPU batches; needs the palette
      * resolved above, so this runs after the texture/palette setup. */
@@ -968,16 +1214,14 @@ void worldview_run(const char *mission_path, RenderMode mode)
                 free(ter_cpu[i]);
                 if (ter_gpu[i]) render_mesh_destroy(ter_gpu[i]);
                 ter_cpu[i] = build_terrain_verts(scene, &scene->patches[i], HS[hs_idx],
-                                                 TERRAIN_STEP, &ter_vc[i]);
+                                                 TERRAIN_STEP, 0, &ter_vc[i]);
                 uint32_t gvc = 0;      /* GPU: full resolution (step 1) */
-                float *gv = build_terrain_verts(scene, &scene->patches[i], HS[hs_idx], 1, &gvc);
+                float *gv = build_terrain_verts(scene, &scene->patches[i], HS[hs_idx], 1, 1, &gvc);
                 ter_gpu[i] = gv ? render_mesh_create(gv, gvc) : NULL;
                 free(gv);
             }
-            free(road_cpu);
-            if (road_gpu) render_mesh_destroy(road_gpu);
-            road_cpu = build_road_verts(scene, HS[hs_idx], &road_vc);
-            road_gpu = road_cpu ? render_mesh_create(road_cpu, road_vc) : NULL;
+            free_road_quads(roads, road_n);
+            roads = build_road_quads(scene, HS[hs_idx], &road_n);
             terrain_dirty = 0;
         }
 
@@ -988,22 +1232,38 @@ void worldview_run(const char *mission_path, RenderMode mode)
          * (Original far plane is 150 / mission WDEF value; the dev viewer
          * deliberately keeps its long draw distance instead.) */
         float fovy = 2.0f * atanf(tanf(0.25f * (float)M_PI) * (float)FB_H / (float)FB_W);
-        float view[16], proj[16], identity[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
+        float view[16], proj[16];
         mat_lookat_up(view, eye, fwd, cam_up);
         mat_perspective(proj, fovy, (float)FB_W / FB_H, znear, zfar);
 
         render_begin_frame();
 
         if (mode == RENDER_HARDWARE) {
+            /* Camera-relative: eye at the origin; every model translation is
+             * (position - eye), see rel_model. */
+            static const float origin3[3] = { 0, 0, 0 };
+            float view_rel[16];
+            mat_lookat_up(view_rel, origin3, fwd, cam_up);
             render_set_lighting(&wl.gpu);
-            render_3d_begin(view, proj);
+            render_3d_begin(view_rel, proj);
             for (int i = 0; i < scene->patch_count; i++)
-                if (ter_gpu[i])
-                    render_3d_draw(ter_gpu[i], identity, ter_render_tex);
-            if (road_gpu) render_3d_draw(road_gpu, identity, road_render_tex);
+                if (ter_gpu[i]) {
+                    const TerrainPatch *tp = &scene->patches[i];
+                    float to[3] = { tp->origin[0], 0.0f, tp->origin[1] }, model[16];
+                    rel_model(model, NULL, to, eye);
+                    render_3d_draw(ter_gpu[i], model, ter_render_tex);
+                }
+            for (int i = 0; i < road_n; i++) {
+                int t = road_quad_tex(&roads[i], eye, fwd);
+                if (t >= 0 && roads[i].gpu) {
+                    float ro[3] = { roads[i].org[0], 0.0f, roads[i].org[1] }, model[16];
+                    rel_model(model, NULL, ro, eye);
+                    render_3d_draw_decal(roads[i].gpu, model, road_gpu_tex[t]);
+                }
+            }
             for (int i = 0; i < scene->count; i++) {
                 if (!item[i]) continue;
-                float model[16]; item_model(model, scene->items[i].R, scene->items[i].t);
+                float model[16]; rel_model(model, scene->items[i].R, scene->items[i].t, eye);
                 for (int b = 0; b < item[i]->batch_count; b++)
                     render_3d_draw(item[i]->batches[b].gpu, model, item[i]->batches[b].tex);
             }
@@ -1013,7 +1273,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
                 mat3_mul(veh_R, veh->parts[i].R, Rw);
                 mat3_vec(veh_R, veh->parts[i].t, tw);
                 for (int k = 0; k < 3; k++) tw[k] += veh_t[k];
-                item_model(model, Rw, tw);
+                rel_model(model, Rw, tw, eye);
                 for (int b = 0; b < veh_item[i]->batch_count; b++)
                     render_3d_draw(veh_item[i]->batches[b].gpu, model, veh_item[i]->batches[b].tex);
             }
@@ -1024,8 +1284,11 @@ void worldview_run(const char *mission_path, RenderMode mode)
             for (int i = 0; i < scene->patch_count; i++)
                 if (ter_cpu[i])
                     draw_terrain_sw(&tgt, ter_cpu[i], ter_vc[i], s_terrain_tex, s_terrain_idx);
-            if (road_cpu)
-                draw_terrain_sw(&tgt, road_cpu, road_vc, NULL, road_idx);
+            for (int i = 0; i < road_n; i++) {
+                int t = road_quad_tex(&roads[i], eye, fwd);
+                if (t >= 0 && roads[i].sw)
+                    draw_terrain_sw(&tgt, roads[i].sw, roads[i].sw_vc, road_tex[t], road_idx);
+            }
             for (int i = 0; i < scene->count; i++)
                 draw_item_sw(&tgt, &scene->items[i], pal_sw, NULL);
             for (int i = 0; i < veh_parts; i++) {
@@ -1083,8 +1346,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
         free(ter_cpu[i]);
         if (ter_gpu[i]) render_mesh_destroy(ter_gpu[i]);
     }
-    free(road_cpu);
-    if (road_gpu) render_mesh_destroy(road_gpu);
+    free_road_quads(roads, road_n);
     for (int i = 0; i < s_gtex_count; i++)
         if (s_gtex[i].gpu) render_texture_destroy(s_gtex[i].gpu);
     s_gtex_count = 0;
