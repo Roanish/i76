@@ -775,6 +775,92 @@ is just this record grid; every vehicle part mesh is a **standard OEG `.geo` pak
 already). Rendering a car = parse VGEO group (0,0), compose the parent chain
 (scene.c resolve_part logic), `geo_cache_acquire(name)` per part.
 
+## Time of day + global lighting (2026-11-22)
+
+Bodies seen (export + headless): WRLD 004b45f0, sky_light_init 0046f5d0, phase getters
+0046f590/5a0/5b0/5c0, dominant_light_dir 00470380, vertex_light 0046ff00 (called from
+render_subobject 0044e280 and 0045f150), music_track_set 00418e70/00418e80,
+raster_poly 00471160 + projector table 004fbad0; zdx5draw.dll SetLumaTable (empty), Render
+→ 10004700, vertex convert 10001600.
+
+**Per-mission data (WRLD, offsets from the "WRLD" tag):**
+| off | meaning | evidence |
+|---|---|---|
+| +0x08 | music track ??? | → 00418e70 → 00418e80 (CD/music track select); 2..10 across missions |
+| +0x0c..+0x18, +0x19..+0x25 | two (3 × dword + byte) groups → DAT_00653f80..f9c | ZERO in all 8-bit missions — unused |
+| +0x26 / +0x33 | palette .act / luminance .lum | (*DAT_00653f44)(ctx,0,256,pal,lum) |
+| +0x9b | **hour of day** (0..23) | → sky_light_init; values 0,3,6,8,9,12,15,17,18,21 |
+| +0x13f | far plane (600 in all missions) | → DAT_004f36b4 |
+
+**sky_light_init(hour):** clears the light table (DAT_00591378.., g_light_count); phase =
+`((hour+2) % 24) * 8 / 24` → 8 phases of 3 h. Phase table 004fb188, 0x14 per entry:
++0x00 day flag, +0x04 celestial texture (nk_1mon1.map / nk_1sun1.map, vfs_lod'ed into
+DAT_00617fe0), +0x08 angle, +0x0c intensity, +0x10 ambient. Light dir = row 1 (m[3..5]) of
+rot(axis (0,0,1) @004fb178, angle) → DAT_00617ff0/f4/f8. Also sets DAT_00617ffc = 0.7496,
+DAT_00618000 = 0.000417 (depth-haze coefficients, below).
+| phase | hours | body | day | angle | intensity | ambient |
+|---|---|---|---|---|---|---|
+| 0 | 22–00 | moon | 0 | 30° | 0.094 | 0 |
+| 1 | 01–03 | moon | 0 | 70° | 0.031 | 0 |
+| 2 | 04–06 | sun | 1 | 75° | 0.625 | 0 |
+| 3 | 07–09 | sun | 1 | 55° | 1.0 | 0 |
+| 4 | 10–12 | sun | 1 | 10° | 1.0 | 0 |
+| 5 | 13–15 | sun | 1 | 45° | 1.0 | 0 |
+| 6 | 16–18 | sun | 1 | 70° | 1.0 | 0 |
+| 7 | 19–21 | sun | 1 | 75° | 1.0 | 0 |
+All angles positive → the light stays on one side of the Z axis (no east→west swing) ???.
+
+**vertex_light (per vertex, normals = the mesh's 2nd vec3 array, p = VIEW-space position):**
+- day: `I_v = min(1, clamp(0.7496 + 0.000417·p.z, 0.75, 1) · max(0, −(n·L)) · I + ambient)`
+  (L = sun dir in object space; the depth term = 0.75 near → 1.0 at z≈600 = far plane:
+  distance haze that flattens shading).
+- night: moon term + Σ point lights from light_register: omni `1/(k·d²+1) · max(0,n·l) · 0.75`,
+  spot `pow(cone, exp) · falloff · 1.25`; capped at 1.
+- dominant_light_dir: day → sun dir; night → strongest point light if it beats 1.5 × phase
+  intensity, else moon (used per object — shadows? ???).
+Intensity is stored per face-vertex at record +0x5c (pos +0x48, uv +0x54/+0x58) and passed as a
+float through raster_poly's projector (004fbad0[flags&0xc]) to the span stage.
+
+**.lum (64 KB) = 32 shade rows × 256-colour remap** (rows 32–63 repeat row 31; rows 64+ hold
+other data ???): row 0 ≈ 1.40× brightness, row 7 ≈ 1.00×, row 31 ≈ 0.21×. Rows are tinted per
+mission (t15 darks warm-brown, p01 different) → the per-mission ambient/colour mood is BAKED here.
+**HW (D3D) ignores .lum:** zdx5draw SetLumaTable is an empty stub; the D3D vertex colour = per-
+vertex 0..256 factor × face RGB >> 8 (plain Gouraud). OPEN: the exact intensity → .lum row (SW)
+and intensity → factor (HW) mapping (span stage / backend not yet read); terrain lighting
+(00494420, 00496a00, 004959d0, 00495f80 read the light globals) and the sky renderer (00433fd0,
+reads the celestial texture) not yet read.
+
+**Sign conventions (verified):** FUN_0049b480 is the standard quaternion → ROW-MAJOR 3x3; axis
+(0,0,1), angle θ → stored light vector = row 1 = (sin θ, cos θ, 0). OEG normal array B is unit-
+length and points INWARD (roof panel DS11BDYT = −Y, tyre outer cap points at the car), so
+`max(0, −n·L)` = `max(0, n_out·L)` with L pointing TOWARD the light in a Y-up world. Noon (10°)
+therefore lights up-facing surfaces, as expected.
+
+**Terrain lighting (00496a00 main terrain, 004959d0 setup, 00495f80 per-vertex, 00494420 a
+4-vertex-quad sprite/decal pass ???):** two paths chosen by display_ready():
+- SW: FLAT per triangle — plane from 3 verts (FUN_0049bda0), light rotated to view space,
+  `I = max(0, −n·L)·haze + ambient`; both triangles of a quad drawn as one if their shade
+  levels match.
+- D3D: per-VERTEX Gouraud (FUN_00495f80): grid normal by central differences of the 12-bit
+  heights one cell either side (FUN_00494fe0 global lookup), scaled 0.1/cell (0x3dcccccd /
+  DAT_005fb5a0, ×0.25 on the doubled sums) → `n = (−dx,1,−dz)/√(dx²+dz²+1)`;
+  `I = max(0,n·L)·haze + ambient`.
+- Terrain ambient DAT_005a687c = phase +0x10 (0). Terrain does NOT multiply by the phase
+  intensity (objects do). The decal pass uses `haze·I·L.y + ambient` (treats surfaces as up).
+**Intensity → shade row (span stage, 00496a00):** `level = round((1 − I) × 8064.0)`
+(DAT_004fc328 = 0x45fc0000 = 31.5×256, rounding via the 1.5·2^52 constant), row = bits 8..12 →
+**row = (1 − I) × 31.5**: I = 0 → row 31 (≈0.21×), I = 1 → row 0 (≈1.4×, overbright).
+
+**Our renderer (modernised, src/engine/lighting.c + mesh.frag):** per-pixel
+`I = min(1, intensity·max(0,N·L)·haze + ambient)`, `row = (1−I)·31.5`, `rgb = albedo × curve[row]`
+(interpolated), with the original phase table, light vector, haze and row mapping verbatim; curve[]
+= each .lum row's brightness per channel (mean remapped palette ÷ base palette; t15: row0 1.26/1.40/
+1.62, row7 1.00, row31 0.21/0.20/0.24). GPU terrain = full resolution with the D3D grid normals;
+SW terrain keeps a 2-cell downsample. Deliberate deviation (modern mode): terrain ALSO multiplies
+by the phase intensity, so night ground is dim; the faithful bright-night terrain is reserved for a
+future legacy mode, and modern night visibility is to come from dynamic lights. Night point lights, the sky/sun/moon render and
+terrain-specific lighting are not implemented yet.
+
 ## WLOC + .wdf wheels — tyre placement (2026-11-22)
 
 Bodies seen (headless, force-created): wloc_load 004b92b0, wheel_def_load 004b92f0,

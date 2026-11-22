@@ -112,7 +112,9 @@ void render_blit_indexed(const uint8_t *pixels, uint32_t width, uint32_t height)
  * uniform scale at most) for correct lighting.
  * ----------------------------------------------------------------------- */
 
-/* Opaque GPU vertex buffer. Vertices are interleaved [px,py,pz, u,v]. */
+/* Opaque GPU vertex buffer. Vertices are interleaved [px,py,pz, u,v, nx,ny,nz]
+ * (RENDER_VERT_FLOATS). Normals are OUTWARD-facing, in object space. */
+#define RENDER_VERT_FLOATS 8
 typedef struct RenderMesh RenderMesh;
 
 /* Opaque GPU texture — an 8-bit palette-index image sampled by the mesh pass,
@@ -121,7 +123,8 @@ typedef struct RenderTexture RenderTexture;
 
 /*
  * render_mesh_create()
- *   Upload `vertex_count` vertices (5 floats each: position then UV) to a
+ *   Upload `vertex_count` vertices (RENDER_VERT_FLOATS each: position, UV,
+ *   normal) to a
  *   device-local vertex buffer. Drawn as a non-indexed triangle list, so
  *   vertex_count must be a multiple of 3 (triangulate on the CPU; see
  *   worldview.c). Returns NULL on failure or empty input.
@@ -154,5 +157,28 @@ void render_3d_begin(const float view[16], const float proj[16]);
  */
 void render_3d_draw(const RenderMesh *m, const float model[16],
                     const RenderTexture *tex);
+
+/*
+ * Global (directional) lighting for the 3D pass, per pixel — the original's
+ * model (nitro.exe vertex_light FUN_0046ff00 / terrain FUN_00495f80):
+ *   I    = min(1, intensity * max(0, N.L) * haze(depth) + ambient)
+ *   haze = clamp(haze_base + haze_slope * depth, haze_min, 1)   (view depth)
+ *   row  = (1 - I) * 31.5                     (span stage, 8064/256)
+ *   rgb  = albedo * curve[row]                (interpolated between rows)
+ * curve[] is the brightness response measured from the mission's .lum shade
+ * table (32 rows, per channel; ~1.4x at row 0 .. ~0.21x at row 31).
+ * light_dir points TOWARD the light, in world space. Until this is called the
+ * pass is unlit (curve all 1).
+ */
+#define RENDER_LIGHT_ROWS 32
+typedef struct {
+    float light_dir[3];   /* unit vector toward the sun/moon (world space) */
+    float intensity;      /* phase intensity                               */
+    float ambient;        /* phase ambient (0 in every original phase)     */
+    float haze_base, haze_slope, haze_min;
+    float curve[RENDER_LIGHT_ROWS][3];   /* brightness multiplier per row  */
+} RenderLighting;
+
+void render_set_lighting(const RenderLighting *l);
 
 #endif /* RENDER_H */

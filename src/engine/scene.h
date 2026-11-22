@@ -65,6 +65,9 @@ typedef struct {
     /* WDEF->WRLD terrain texture set (empty if the mission has no WDEF). */
     char          palette_name[16];  /* e.g. "t15.act"      (terrain palette)  */
     char          ground_tex[16];    /* e.g. "tt161sd_.map" (ground texture)   */
+    char          lum_name[16];      /* e.g. "t15.LUM" (32-row shade table)    */
+    char          sky_tex[16];       /* e.g. "nk_1cld2.map" (cloud texture)    */
+    int           hour;              /* WRLD +0x9b time of day 0..23 (-1 = none) */
 } Scene;
 
 /* Load a mission file (path relative to the asset root, e.g. "miss8/N01.CBT").

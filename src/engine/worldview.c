@@ -23,6 +23,8 @@
 #include "engine/vfs.h"        /* vfs_read_file (palette load) */
 #include "engine/vehicle.h"
 #include "engine/mods.h"         /* asset_present_file (palette) */
+#include "engine/lighting.h"     /* time-of-day global light */
+#include "engine/pix.h"          /* vfs_lod (.lum: lighting is not moddable) */
 #include "engine/texture.h"
 #include "render/render.h"
 #include "render/softraster.h"
@@ -105,9 +107,10 @@ static void item_model(float m[16], const float R[9], const float t[3])
 /* Mesh building — triangulate faces + bake flat normals                     */
 /* ----------------------------------------------------------------------- */
 
-/* GPU terrain mesh: interleaved [px,py,pz, u,v] (planar UV in world x/z), drawn
- * by the hardware path. The software path reads the patch heightfield directly. */
-#define MV 5   /* floats per GPU mesh vertex (pos3 + uv2); matches render_vk.c */
+/* GPU mesh vertex: interleaved [px,py,pz, u,v, nx,ny,nz] (RENDER_VERT_FLOATS;
+ * outward normals for the global light). Terrain uses planar UV in world x/z.
+ * The software path reads only pos+uv. */
+#define MV RENDER_VERT_FLOATS
 #define TERRAIN_TILE 96.0f   /* world units per terrain-texture repeat */
 /* Vertical scale: world Y = height12 * 0.1 (nitro.exe terrain_height_sample,
  * FUN_004953e0). `hscale` is now a debug multiplier on this (1.0 = exact). */
@@ -130,10 +133,47 @@ static float cell_h12(const Scene *s, long gx, long gz)
     return -1.0f;
 }
 
-static float *build_terrain_verts(const Scene *s, const TerrainPatch *p,
-                                  float hscale, uint32_t *out_count)
+static float sample_terrain_y(const Scene *s, float x, float z, float hscale);
+
+/* Outward terrain normal at world (x,z): central differences of the faithful
+ * bilinear height sampler, one fine cell apart. */
+static void terrain_normal_at(const Scene *s, float x, float z, float hscale, float n[3])
 {
-    int n = p->dim, step = TERRAIN_STEP;
+    float d = s->patch_count ? s->patches[0].cell : 5.0f;
+    float dydx = (sample_terrain_y(s, x + d, z, hscale) - sample_terrain_y(s, x - d, z, hscale)) / (2.0f * d);
+    float dydz = (sample_terrain_y(s, x, z + d, hscale) - sample_terrain_y(s, x, z - d, hscale)) / (2.0f * d);
+    float l = sqrtf(dydx * dydx + 1.0f + dydz * dydz);
+    n[0] = -dydx / l; n[1] = 1.0f / l; n[2] = -dydz / l;
+}
+
+/* Outward terrain normal at GLOBAL grid point (gx,gz), exactly as the
+ * original's D3D terrain path (FUN_00495f80): central differences of the
+ * 12-bit heights one cell either side, scaled 0.1/cell, n = (-dx, 1, -dz)
+ * normalised. (Missing neighbours fall back to the centre height; the
+ * original reads 0 there, which only matters at the world edge.) */
+static void terrain_grid_normal(const Scene *s, long gx, long gz, float hscale, float n[3])
+{
+    float cell = s->patches[0].cell;
+    float h0 = cell_h12(s, gx, gz);
+    float hl = cell_h12(s, gx - 1, gz), hr = cell_h12(s, gx + 1, gz);
+    float hd = cell_h12(s, gx, gz - 1), hu = cell_h12(s, gx, gz + 1);
+    if (hl < 0) hl = h0;
+    if (hr < 0) hr = h0;
+    if (hd < 0) hd = h0;
+    if (hu < 0) hu = h0;
+    float k  = TERRAIN_Y_SCALE * hscale / (2.0f * cell);
+    float dx = (hr - hl) * k, dz = (hu - hd) * k;
+    float l  = sqrtf(dx * dx + dz * dz + 1.0f);
+    n[0] = -dx / l; n[1] = 1.0f / l; n[2] = -dz / l;
+}
+
+/* Terrain triangle soup for one patch, every `step` fine cells. The GPU path
+ * uses step 1 (full resolution, as the original); the software path uses
+ * TERRAIN_STEP to stay fast. */
+static float *build_terrain_verts(const Scene *s, const TerrainPatch *p,
+                                  float hscale, int step, uint32_t *out_count)
+{
+    int n = p->dim;
     long c0 = lroundf(p->origin[0] / p->cell);
     long r0 = lroundf(p->origin[1] / p->cell);
     int cells = (n + step - 1) / step;
@@ -151,6 +191,7 @@ static float *build_terrain_verts(const Scene *s, const TerrainPatch *p,
         for (int gx = 0; gx < n; gx += step) {
             int cx[4] = { gx, gx+step, gx+step, gx }, cz[4] = { gz, gz, gz+step, gz+step };
             float c[4][3];
+            long  g[4][2];
             int ok = 1;
             for (int i = 0; i < 4; i++) {
                 float h = cell_h12(s, c0 + cx[i], r0 + cz[i]);
@@ -158,13 +199,17 @@ static float *build_terrain_verts(const Scene *s, const TerrainPatch *p,
                 c[i][0] = p->origin[0] + cx[i] * p->cell;
                 c[i][1] = h * (TERRAIN_Y_SCALE * hscale);
                 c[i][2] = p->origin[1] + cz[i] * p->cell;
+                g[i][0] = c0 + cx[i]; g[i][1] = r0 + cz[i];
             }
             if (!ok) continue;
             int quad[6] = { 0,1,2, 0,2,3 };
             for (int t = 0; t < 6; t++) {
                 const float *a = c[quad[t]];
+                float nrm[3];
+                terrain_grid_normal(s, g[quad[t]][0], g[quad[t]][1], hscale, nrm);
                 *w++ = a[0]; *w++ = a[1]; *w++ = a[2];
                 *w++ = a[0] / TERRAIN_TILE; *w++ = a[2] / TERRAIN_TILE;
+                *w++ = nrm[0]; *w++ = nrm[1]; *w++ = nrm[2];
             }
         }
     }
@@ -219,11 +264,16 @@ static float *build_road_verts(const Scene *s, float hscale, uint32_t *out_count
         float br[3] = { b->rx, sample_terrain_y(s,b->rx,b->rz,hscale)+ROAD_Y_OFFSET, b->rz };
         float u0 = ulen / ROAD_TILE, u1 = (ulen + adv) / ROAD_TILE;
         ulen += adv;
-        float tri[6][MV] = {
+        float tri[6][5] = {
             { al[0],al[1],al[2], u0,0 }, { ar[0],ar[1],ar[2], u0,1 }, { br[0],br[1],br[2], u1,1 },
             { al[0],al[1],al[2], u0,0 }, { br[0],br[1],br[2], u1,1 }, { bl[0],bl[1],bl[2], u1,0 },
         };
-        for (int k = 0; k < 6; k++) for (int j = 0; j < MV; j++) *w++ = tri[k][j];
+        for (int k = 0; k < 6; k++) {
+            float nrm[3];
+            terrain_normal_at(s, tri[k][0], tri[k][2], hscale, nrm);   /* road lies on terrain */
+            for (int j = 0; j < 5; j++) *w++ = tri[k][j];
+            *w++ = nrm[0]; *w++ = nrm[1]; *w++ = nrm[2];
+        }
     }
     *out_count = (uint32_t)(w - v) / MV;
     return v;
@@ -594,9 +644,11 @@ static void build_mesh_batches(MeshEntry *e, const GeoMesh *m, const Rgb8 *pal,
             for (int k = 1; k + 1 < n; k++) {
                 int ei[3] = { first, first + k, first + k + 1 };
                 for (int j = 0; j < 3; j++) {
-                    const float *p = &m->verts[m->indices[ei[j]] * 3];
+                    const float *p  = &m->verts[m->indices[ei[j]] * 3];
+                    const float *nv = &m->normals[m->indices[ei[j]] * 3];
                     *w++ = p[0]; *w++ = p[1]; *w++ = p[2];
                     *w++ = m->uv[ei[j] * 2]; *w++ = m->uv[ei[j] * 2 + 1];
+                    *w++ = nv[0]; *w++ = nv[1]; *w++ = nv[2];
                 }
             }
         }
@@ -666,6 +718,16 @@ void worldview_run(const char *mission_path, RenderMode mode)
     s_sky_idx     = nearest_index(pal_sw, 42, 52, 74);   /* dusk sky    */
     s_terrain_idx = nearest_index(pal_sw, 96, 84, 60);   /* brown ground */
     build_checker(pal_sw);
+
+    /* Global light from the mission's time of day (WRLD hour) + its .lum shade
+     * table (ambient floor/tint). Base archives only — lighting isn't moddable.
+     * L steps the hour by 3 (one phase) to preview every phase. */
+    size_t lum_sz = 0;
+    uint8_t *lum = scene->lum_name[0] ? vfs_lod(scene->lum_name, &lum_sz) : NULL;
+    int light_hour = scene->hour;
+    WorldLighting wl;
+    lighting_build(&wl, light_hour, (const uint8_t *)pal_sw, lum, lum_sz);
+
     /* The mission's authored ground texture (WDEF WRLD name, e.g. tt161sd_.map),
      * planar-mapped onto the heightfield. Resolved through texture_get's pak
      * fallback since it lives in a .pak, not a loose file. */
@@ -753,6 +815,10 @@ void worldview_run(const char *mission_path, RenderMode mode)
             if (orbit) orb_yaw = car.yaw + (float)M_PI;
         }
         if (in.pressed[PK_SPACE] && !orbit) drive = !drive;
+        if (in.pressed[PK_L]) {
+            light_hour = ((light_hour < 0 ? 12 : light_hour) + 3) % 24;
+            lighting_build(&wl, light_hour, (const uint8_t *)pal_sw, lum, lum_sz);
+        }
         if (in.pressed[PK_P]) { hs_idx = (hs_idx + 1) % (int)(sizeof HS / sizeof HS[0]); terrain_dirty = 1; }
 
         float fwd[3];
@@ -827,8 +893,12 @@ void worldview_run(const char *mission_path, RenderMode mode)
             for (int i = 0; i < scene->patch_count; i++) {
                 free(ter_cpu[i]);
                 if (ter_gpu[i]) render_mesh_destroy(ter_gpu[i]);
-                ter_cpu[i] = build_terrain_verts(scene, &scene->patches[i], HS[hs_idx], &ter_vc[i]);
-                ter_gpu[i] = ter_cpu[i] ? render_mesh_create(ter_cpu[i], ter_vc[i]) : NULL;
+                ter_cpu[i] = build_terrain_verts(scene, &scene->patches[i], HS[hs_idx],
+                                                 TERRAIN_STEP, &ter_vc[i]);
+                uint32_t gvc = 0;      /* GPU: full resolution (step 1) */
+                float *gv = build_terrain_verts(scene, &scene->patches[i], HS[hs_idx], 1, &gvc);
+                ter_gpu[i] = gv ? render_mesh_create(gv, gvc) : NULL;
+                free(gv);
             }
             free(road_cpu);
             if (road_gpu) render_mesh_destroy(road_gpu);
@@ -851,6 +921,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
         render_begin_frame();
 
         if (mode == RENDER_HARDWARE) {
+            render_set_lighting(&wl.gpu);
             render_3d_begin(view, proj);
             for (int i = 0; i < scene->patch_count; i++)
                 if (ter_gpu[i])
@@ -909,7 +980,12 @@ void worldview_run(const char *mission_path, RenderMode mode)
                          mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE",
                          eye[0], eye[1], eye[2], HS[hs_idx]);
             font_draw(font, line, fb, FB_W, FB_H, 8, 8, IDX_TEXT);
-            font_draw(font, "SPACE DRIVE/FLY  WASD/ARROWS  SHIFT BOOST  P HSCALE  TAB SW/HW  ESC",
+            snprintf(line, sizeof line, "TIME %02d:00%s  phase %d  %s %.0f deg  I %.3f%s",
+                     wl.hour < 0 ? 12 : wl.hour, light_hour == scene->hour ? "" : " (L preview)",
+                     wl.phase, wl.is_day ? "SUN" : "MOON", wl.angle * 57.29578f, wl.intensity,
+                     mode == RENDER_SOFTWARE ? "   (SW: unlit)" : "");
+            font_draw(font, line, fb, FB_W, FB_H, 8, 20, IDX_TEXT);
+            font_draw(font, "SPACE DRIVE/FLY  O ORBIT  L HOUR+3  WASD/ARROWS  SHIFT BOOST  P HSCALE  TAB SW/HW  ESC",
                       fb, FB_W, FB_H, 8, FB_H - 16, IDX_DIM);
         }
 
@@ -937,6 +1013,12 @@ void worldview_run(const char *mission_path, RenderMode mode)
     s_gtex_count = 0;
     free(mesh_map); free(item); free(veh_item); free(ter_cpu); free(ter_vc); free(ter_gpu);
     free(s_checker.pixels); s_checker.pixels = NULL;
+    /* Leave the shared lighting UBO unlit for whatever runs next. */
+    RenderLighting unlit = { .light_dir = {0,1,0}, .haze_base = 1.0f, .haze_min = 1.0f };
+    for (int r = 0; r < RENDER_LIGHT_ROWS; r++)
+        unlit.curve[r][0] = unlit.curve[r][1] = unlit.curve[r][2] = 1.0f;
+    render_set_lighting(&unlit);
+    free(lum);
     texture_cache_clear();
     if (font) font_free(font);
     vehicle_free(veh);

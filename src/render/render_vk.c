@@ -115,8 +115,11 @@ static uint32_t                 s_idx_w = 0;
 static uint32_t                 s_idx_h = 0;
 static bool                     s_idx_first_upload = true;
 
-/* Palette UBO: 256 × vec4, std140 = 4096 bytes */
-#define PALETTE_UBO_SIZE (256 * 4 * sizeof(float))
+/* Palette UBO: 256 × vec4 palette, then 4 × vec4 of global lighting
+ * (light_dir, sun, ambient, haze) read only by mesh.frag. std140. */
+#define PALETTE_ENTRIES   256
+#define LIGHTING_VEC4S    (2 + RENDER_LIGHT_ROWS)   /* dir+I, params, curve */
+#define PALETTE_UBO_SIZE ((PALETTE_ENTRIES + LIGHTING_VEC4S) * 4 * sizeof(float))
 static VkBuffer                 s_pal_buf;
 static VkDeviceMemory           s_pal_mem;
 static void                    *s_pal_map;
@@ -138,8 +141,8 @@ static VkDescriptorSetLayout    s_mesh_dsl;      /* texture sampler + palette UB
 static VkSampler                s_mesh_sampler;  /* NEAREST + REPEAT              */
 static VkDescriptorPool         s_tex_desc_pool; /* one set per RenderTexture     */
 
-/* Per-mesh GPU vertex buffer. Vertex = 5 floats (pos3 + uv2), stride 20. */
-#define MESH_VERT_FLOATS 5
+/* Per-mesh GPU vertex buffer. Vertex = pos3 + uv2 + normal3, stride 32. */
+#define MESH_VERT_FLOATS RENDER_VERT_FLOATS
 struct RenderMesh {
     VkBuffer        buf;
     VkDeviceMemory  mem;
@@ -155,9 +158,11 @@ struct RenderTexture {
     VkDescriptorSet set;
 };
 
-/* Push constant: mvp (mat4) = 64 bytes. */
+/* Push constant: mvp + model (mat4 each) = 128 bytes (the guaranteed
+ * minimum maxPushConstantsSize). model's 3x3 rotates normals to world. */
 typedef struct {
     float mvp[16];
+    float model[16];
 } MeshPush;
 
 /* Per-frame 3D draw queue. Reset by render_3d_begin, replayed by end_frame. */
@@ -927,15 +932,16 @@ static void create_mesh_pipeline(void)
         .binding = 0, .stride = MESH_VERT_FLOATS * sizeof(float),
         .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     };
-    VkVertexInputAttributeDescription attrs[2] = {
+    VkVertexInputAttributeDescription attrs[3] = {
         { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
         { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT,    .offset = 3 * sizeof(float) },
+        { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 5 * sizeof(float) },
     };
     VkPipelineVertexInputStateCreateInfo vi = {
         .sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .vertexBindingDescriptionCount   = 1,
         .pVertexBindingDescriptions      = &bind,
-        .vertexAttributeDescriptionCount = 2,
+        .vertexAttributeDescriptionCount = 3,
         .pVertexAttributeDescriptions    = attrs,
     };
     VkPipelineInputAssemblyStateCreateInfo ia = {
@@ -1097,8 +1103,14 @@ static void create_palette_buffer(void)
                 &s_pal_buf, &s_pal_mem);
     vkMapMemory(s_device, s_pal_mem, 0, PALETTE_UBO_SIZE, 0, &s_pal_map);
 
-    /* Default palette: all black */
+    /* Default palette: all black. Default lighting: unlit (brightness curve
+     * all 1) so passes that never call render_set_lighting look unchanged. */
     memset(s_pal_map, 0, PALETTE_UBO_SIZE);
+    float *lt = (float *)s_pal_map + PALETTE_ENTRIES * 4;
+    lt[1] = 1.0f;                                   /* light_dir +Y, I = 0  */
+    lt[5] = 1.0f; lt[7] = 1.0f;                     /* haze base 1, min 1   */
+    for (int r = 0; r < RENDER_LIGHT_ROWS; r++)     /* curve = 1: unlit     */
+        lt[8 + r * 4 + 0] = lt[8 + r * 4 + 1] = lt[8 + r * 4 + 2] = 1.0f;
 }
 
 /* -----------------------------------------------------------------------
@@ -1459,6 +1471,22 @@ void render_end_frame(void)
     s_pending_palette = false;
 }
 
+void render_set_lighting(const RenderLighting *l)
+{
+    /* vec4s after the palette (std140, see mesh.frag):
+     *   [dir.xyz, intensity] [ambient, haze base, slope, min] [curve rgb,0] x32 */
+    float *lt = (float *)s_pal_map + PALETTE_ENTRIES * 4;
+    lt[0] = l->light_dir[0]; lt[1] = l->light_dir[1]; lt[2] = l->light_dir[2];
+    lt[3] = l->intensity;
+    lt[4] = l->ambient; lt[5] = l->haze_base; lt[6] = l->haze_slope; lt[7] = l->haze_min;
+    for (int r = 0; r < RENDER_LIGHT_ROWS; r++) {
+        lt[8 + r * 4 + 0] = l->curve[r][0];
+        lt[8 + r * 4 + 1] = l->curve[r][1];
+        lt[8 + r * 4 + 2] = l->curve[r][2];
+        lt[8 + r * 4 + 3] = 0.0f;
+    }
+}
+
 void render_set_palette(const Rgb8 *palette_256)
 {
     /* Palette UBO layout (std140): 256 × vec4, each vec4 = {r,g,b,1} floats */
@@ -1638,4 +1666,5 @@ void render_3d_draw(const RenderMesh *m, const float model[16],
 
     /* mvp = (proj*view) * model */
     mat4_mul(d->push.mvp, s_view_proj, model);
+    memcpy(d->push.model, model, sizeof d->push.model);
 }

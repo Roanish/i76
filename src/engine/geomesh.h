@@ -17,7 +17,8 @@
  *   0x1c u32  nFaces          (= param_1[7])
  *   0x20 u32  ?
  *   0x24 vec3f posA[nVerts]   (positions — what we render)
- *        vec3f posB[nVerts]   (second vertex set; normals?)
+ *        vec3f norm[nVerts]   (unit vertex normals, stored INWARD-facing —
+ *                              consumed by the lighting pass FUN_0046ff00)
  *        faces[nFaces]: 0x37-byte header (+0x04 = nFaceVerts) then
  *                       nFaceVerts × 0x10-byte entries (+0x00 = vertex index)
  *
@@ -35,6 +36,9 @@ typedef struct {
     int    num_faces;
     int    num_indices;     /* total face-vertex references                   */
     float *verts;           /* [num_verts*3]  x,y,z (positions / array A)      */
+    float *normals;         /* [num_verts*3]  OUTWARD unit normals (array B negated;
+                             * the file stores them inward — the original lights
+                             * with max(0, -n.L), see REVERSING.md lighting) */
     int   *face_first;      /* [num_faces]    offset of face f into indices[]  */
     int   *face_count;      /* [num_faces]    vertex count of face f           */
     int   *indices;         /* [num_indices]  vertex indices into verts        */

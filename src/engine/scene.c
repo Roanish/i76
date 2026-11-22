@@ -310,6 +310,7 @@ static void load_terrain(Scene *s, const uint8_t *d, long sz, const char *missio
  * (see docs/REVERSING.md "World definition (WDEF -> WRLD)"). */
 static void load_world_textures(Scene *s, const uint8_t *d, long sz)
 {
+    s->hour = -1;
     long wdef = find_chunk(d, 0, sz, "WDEF");
     if (wdef < 0) return;
     uint32_t wlen = rd_u32(d + wdef + 4);
@@ -321,8 +322,13 @@ static void load_world_textures(Scene *s, const uint8_t *d, long sz)
     const char *n = (const char *)(d + names);
     snprintf(s->palette_name, sizeof s->palette_name, "%.12s", n + 0 * 13);
     snprintf(s->ground_tex,   sizeof s->ground_tex,   "%.12s", n + 6 * 13);
-    fprintf(stderr, "[scene] world: palette '%s', ground '%s'\n",
-            s->palette_name, s->ground_tex);
+    snprintf(s->lum_name,     sizeof s->lum_name,     "%.12s", n + 1 * 13);
+    snprintf(s->sky_tex,      sizeof s->sky_tex,      "%.12s", n + 4 * 13);
+    /* +0x9b: hour of day -> sky_light_init (FUN_0046f5d0), see
+     * docs/REVERSING.md "Time of day + global lighting". */
+    if (wrld + 0x9b + 4 <= sz) s->hour = (int)rd_u32(d + wrld + 0x9b);
+    fprintf(stderr, "[scene] world: palette '%s', lum '%s', ground '%s', sky '%s', hour %d\n",
+            s->palette_name, s->lum_name, s->ground_tex, s->sky_tex, s->hour);
 }
 
 /* Parse RDEF -> RSEG: the road network. RSEG payload = [u32 ?][u32 count] then

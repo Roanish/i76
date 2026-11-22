@@ -77,13 +77,14 @@ GeoMesh *geomesh_decode(const void *image, size_t size)
     m->num_indices  = (int)total_idx;
 
     m->verts      = malloc(sizeof(float) * 3 * (nV ? nV : 1));
+    m->normals    = malloc(sizeof(float) * 3 * (nV ? nV : 1));
     m->face_first = malloc(sizeof(int) * (nF ? nF : 1));
     m->face_count = malloc(sizeof(int) * (nF ? nF : 1));
     m->indices    = malloc(sizeof(int) * (total_idx ? (size_t)total_idx : 1));
     m->uv         = malloc(sizeof(float) * 2 * (total_idx ? (size_t)total_idx : 1));
     m->face_tex   = calloc((size_t)(nF ? nF : 1), 16);
     m->face_color = calloc((size_t)(nF ? nF : 1), 3);
-    if (!m->verts || !m->face_first || !m->face_count || !m->indices ||
+    if (!m->verts || !m->normals || !m->face_first || !m->face_count || !m->indices ||
         !m->uv || !m->face_tex || !m->face_color) {
         geomesh_free(m);
         return NULL;
@@ -95,6 +96,14 @@ GeoMesh *geomesh_decode(const void *image, size_t size)
         m->verts[i * 3 + 0] = rd_f32(v + 0);
         m->verts[i * 3 + 1] = rd_f32(v + 4);
         m->verts[i * 3 + 2] = rd_f32(v + 8);
+    }
+    /* Normals (vertex array B), right after A. Stored inward-facing; negate
+     * to the conventional outward normal. */
+    for (int i = 0; i < nV; i++) {
+        const uint8_t *v = b + OFF_VERTS + (size_t)(nV + i) * 12;
+        m->normals[i * 3 + 0] = -rd_f32(v + 0);
+        m->normals[i * 3 + 1] = -rd_f32(v + 4);
+        m->normals[i * 3 + 2] = -rd_f32(v + 8);
     }
 
     /* Faces — vertex-index lists. */
@@ -134,6 +143,7 @@ void geomesh_free(GeoMesh *m)
 {
     if (!m) return;
     free(m->verts);
+    free(m->normals);
     free(m->face_first);
     free(m->face_count);
     free(m->indices);
