@@ -170,6 +170,7 @@ typedef struct {
     const RenderMesh    *mesh;
     const RenderTexture *tex;
     MeshPush             push;
+    bool                 decal;   /* depth-biased toward the camera */
 } Draw3D;
 
 #define MAX_DRAW3D 4096
@@ -966,6 +967,13 @@ static void create_mesh_pipeline(void)
         .cullMode    = VK_CULL_MODE_NONE,
         .frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .lineWidth   = 1.0f,
+        .depthBiasEnable = VK_TRUE,     /* amount set per draw (decals) */
+    };
+    VkDynamicState dyn_states[] = { VK_DYNAMIC_STATE_DEPTH_BIAS };
+    VkPipelineDynamicStateCreateInfo dyn = {
+        .sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .dynamicStateCount = 1,
+        .pDynamicStates    = dyn_states,
     };
     VkPipelineMultisampleStateCreateInfo ms = {
         .sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
@@ -1012,6 +1020,7 @@ static void create_mesh_pipeline(void)
         .pMultisampleState   = &ms,
         .pDepthStencilState  = &ds,
         .pColorBlendState    = &cb,
+        .pDynamicState       = &dyn,
         .layout              = s_mesh_layout,
         .renderPass          = s_render_pass,
         .subpass             = 0,
@@ -1422,8 +1431,16 @@ void render_end_frame(void)
     /* 3D world pass first (depth-tested), then the blit as a 2D overlay. */
     if (s_have_3d && s_draw_count > 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s_mesh_pipeline);
+        int bias = -1;
         for (int i = 0; i < s_draw_count; i++) {
             const Draw3D *d = &s_draws[i];
+            if ((int)d->decal != bias) {
+                bias = d->decal;
+                /* Negative = toward the camera (LESS test, depth 0 = near).
+                 * The slope term covers surfaces seen at a grazing angle. */
+                if (bias) vkCmdSetDepthBias(cmd, -4.0f, 0.0f, -2.0f);
+                else      vkCmdSetDepthBias(cmd, 0.0f, 0.0f, 0.0f);
+            }
             VkDeviceSize off = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &d->mesh->buf, &off);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1655,16 +1672,29 @@ void render_3d_begin(const float view[16], const float proj[16])
     s_have_3d    = true;
 }
 
-void render_3d_draw(const RenderMesh *m, const float model[16],
-                    const RenderTexture *tex)
+static void queue_3d(const RenderMesh *m, const float model[16],
+                     const RenderTexture *tex, bool decal)
 {
     if (!m || !tex || s_draw_count >= MAX_DRAW3D) return;
 
     Draw3D *d = &s_draws[s_draw_count++];
-    d->mesh = m;
-    d->tex  = tex;
+    d->mesh  = m;
+    d->tex   = tex;
+    d->decal = decal;
 
     /* mvp = (proj*view) * model */
     mat4_mul(d->push.mvp, s_view_proj, model);
     memcpy(d->push.model, model, sizeof d->push.model);
+}
+
+void render_3d_draw(const RenderMesh *m, const float model[16],
+                    const RenderTexture *tex)
+{
+    queue_3d(m, model, tex, false);
+}
+
+void render_3d_draw_decal(const RenderMesh *m, const float model[16],
+                          const RenderTexture *tex)
+{
+    queue_3d(m, model, tex, true);
 }

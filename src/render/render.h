@@ -159,6 +159,15 @@ void render_3d_draw(const RenderMesh *m, const float model[16],
                     const RenderTexture *tex);
 
 /*
+ * render_3d_draw_decal()
+ *   As render_3d_draw(), for geometry lying ON other geometry (roads on
+ *   terrain): drawn with a small depth bias toward the camera so it wins
+ *   where the two are coplanar, instead of z-fighting.
+ */
+void render_3d_draw_decal(const RenderMesh *m, const float model[16],
+                          const RenderTexture *tex);
+
+/*
  * Global (directional) lighting for the 3D pass, per pixel — the original's
  * model (nitro.exe vertex_light FUN_0046ff00 / terrain FUN_00495f80):
  *   I    = min(1, intensity * max(0, N.L) * haze(depth) + ambient)
