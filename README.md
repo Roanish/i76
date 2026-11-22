@@ -92,17 +92,19 @@ mkdir build && cd build
 cmake ..
 make
 
-# Run from the game folder (assets alongside the binary)
-./i76
-
-# Or point at your asset directory
-./i76 --assets "/path/to/Interstate 76 Nitro Pack"
+# Run: the world viewer is where the current work lives (drive with SPACE)
+./i76 --assets "/path/to/Interstate 76 Nitro Pack" --worldview --render hw
 ```
+
+There is no playable game yet. A plain `./i76` plays the intro videos and loading screen,
+then drops into a placeholder loop (a marker you can move). The viewers below are how to see
+what works today. Without `--assets`, assets are read from the current directory.
 
 ## Running
 
 | Option | Effect |
 |--------|--------|
+| (none) | Intro videos, loading screen, then a placeholder loop |
 | `--assets <path>` | Game asset directory (default: current directory) |
 | `--legacy` | Faithful behaviour for every listed deviation ([`docs/DEVIATIONS.md`](docs/DEVIATIONS.md)) |
 | `--mods <path>` | Mod folder (default `<assets>/mods`), see [`docs/MODDING.md`](docs/MODDING.md) |
