@@ -181,6 +181,8 @@ Reach out if you feel like you deserve some credit, this is a deep community and
 
 David Hopkinson  aka "Hopper" - provided a great insight with his "Hopper's Guide" which delves deep into the model and texture mapping side of things. (1999??)
 
+A big nod to therealjkvalentine and his [i76-everywhere](https://github.com/therealjkvalentine/i76-everywhere) project, which upgrades the original binaries. We considered that route ourselves before going with a full rebuild, and it's great to see it done so well. It's a really comprehensive project with plenty of great ideas and an ambitious engine roadmap, and it has come together impressively fast. Well worth checking out.
+
 ## Reversing Notes
 
 See [`docs/REVERSING.md`](docs/REVERSING.md) for everything deduced from the original
