@@ -9,7 +9,8 @@
  * blitted via the normal Vulkan 8-bit path. Each object's mesh is resolved
  * through the PIX/PAK index (pix.c) exactly as the original engine does.
  *
- * Controls: LEFT/RIGHT orbit, UP/DOWN zoom, SPACE toggle auto-orbit, ESC quit.
+ * Controls: LEFT/RIGHT orbit, UP/DOWN zoom, SPACE height scale, P heightfield
+ * orientation, ESC quit.
  *
  * Entered from main.c with --sceneview [mission]. Requires render_init,
  * vfs_init, pix_init and meshcache_init to have run first.

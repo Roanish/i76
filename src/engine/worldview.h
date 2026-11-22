@@ -2,19 +2,13 @@
 #define WORLDVIEW_H
 
 /*
- * worldview.h — solid 3D scene viewer (free-fly camera).
+ * worldview.h — 3D world viewer and driving test.
  *
  * The real-3D counterpart to sceneview.c's CPU wireframe: it loads the same
- * mission Scene, uploads every placed object and terrain patch as a solid mesh,
- * and renders them through the Vulkan world pass (render_3d_*). A free-fly
- * camera lets you move through the scene to judge placement and alignment.
- *
- * Renders through either backend (software CPU rasterizer or hardware Vulkan
- * pass); TAB toggles live for an A/B of the same scene and camera. `mode` is
- * the initial backend.
- *
- * Controls: WASD move, Q/E down/up, arrows look, Shift boost, P terrain height
- * scale, TAB toggle SW/HW, ESC quit.
+ * mission Scene (objects, terrain, roads) and renders it through either backend
+ * (software rasteriser or Vulkan); `mode` is the initial backend. Fly mode is
+ * a free camera; drive mode runs the vehicle simulation on the original key
+ * bindings. The keys for each mode are listed on screen and in the README.
  */
 
 #include "render/render.h"   /* RenderMode */

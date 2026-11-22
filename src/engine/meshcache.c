@@ -1,10 +1,9 @@
 /*
  * meshcache.c — GEO mesh cache (see meshcache.h)
  *
- * Faithful reimplementation of the original's mesh cache. The data-structure
- * mechanics are reproduced exactly from the reversed code; the two boundaries
- * we haven't fully reversed (file resolution + GEO byte decode) sit behind the
- * `s_loader` hook and `geo_build_mesh()`, both clearly marked TODO.
+ * Faithful reimplementation of the original's mesh cache. File resolution sits
+ * behind the `s_loader` hook (the self-test swaps it); the decode is
+ * geo_build_mesh() via geomesh_decode.
  *
  * Memory model note: the original used two Win32 heaps (g_object_heap for mesh
  * data, g_object_heap2 for nodes) and triggered eviction on HeapAlloc failure,
@@ -215,9 +214,8 @@ static void default_free(void *buf)
 }
 
 /*
- * geo_build_mesh — decode a raw GEO image into a renderable
- * mesh. Now uses the real OEG decoder (geomesh_decode); the cached buffer is a
- * GeoMesh*. Budget accounting uses the source image size (the original tracked
+ * geo_build_mesh — decode a raw GEO image into a renderable mesh; the cached
+ * buffer is a GeoMesh*. Budget accounting uses the source image size (the original tracked
  * the decoded HeapSize; our explicit byte budget is already an approximation
  * — see file header — and source size is a stable, faithful-enough proxy).
  */

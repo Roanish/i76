@@ -161,8 +161,8 @@ static uint8_t terrain_band(int h)
     return (uint8_t)(IDX_TER0 + (h < 150 ? 0 : h < 400 ? 1 : 2));
 }
 
-/* Orientation hypotheses for how the stored 128x128 heightfield maps to world
- * (x,z) — used to test the within-patch alignment we couldn't confirm by xref. */
+/* Heightfield-to-world (x,z) orientation variants, kept from the terrain
+ * investigation; P cycles them. */
 static int height_index(const TerrainPatch *p, int gx, int gz, int orient)
 {
     int n = p->dim;

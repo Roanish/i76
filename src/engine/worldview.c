@@ -40,9 +40,8 @@
 
 /*
  * Faces and terrain carry their own palette indices (decoded .map texels, or a
- * 1x1 flat index for untextured faces), so the viewer no longer lays out shade
- * ramps — it only needs sky/ground fill indices and two HUD-text entries.
- *   IDX_TEXT/DIM : HUD text (present in the mission palette, see load_act_palette)
+ * 1x1 flat index for untextured faces); the viewer only adds HUD colours to
+ * the mission palette (see load_act_palette).
  */
 #define IDX_TEXT  200
 #define IDX_DIM   201
@@ -275,8 +274,8 @@ static int cell_surface(const Scene *s, long gx, long gz)
 }
 
 /* Vehicle ground query: bilinear height, the face normal of the heightfield
- * triangle under (x, z), and the cell's surface type. Terrain only for now
- * (see docs/REVERSING.md "Ground contact query"). */
+ * triangle under (x, z), and the cell's surface type. Terrain only; drivable
+ * objects are not handled yet (docs/REVERSING.md "Ground contact query"). */
 static float vehsim_ground_cb(void *ud, float x, float y, float z, float n[3], int *surf)
 {
     (void)y;
@@ -572,37 +571,14 @@ static void road_texture_names(const char *mission_path, char names[30][16])
 }
 
 /* ----------------------------------------------------------------------- */
-/* Drive-mode car — arcade physics + terrain collision (test harness)        */
+/* Drive-mode car pose, set from the vehicle simulation each frame           */
 /* ----------------------------------------------------------------------- */
-
-/*
- * Feel constants. These are HARNESS values (units = world units ≈ metres,
- * matching the Stag's 5-unit length), NOT reversed from the original — the
- * real per-frame vehicle sim (compnent.cdf ENGN/BRAK/SUSP tables) is future
- * work. Gravity 9.8 matches the engine's own ballistic constant (flamer).
- */
-#define CAR_ACCEL      12.0f   /* m/s^2 throttle                            */
-#define CAR_ACCEL_BOOST 22.0f  /* m/s^2 with Shift                          */
-#define CAR_BRAKE      25.0f   /* m/s^2 braking (S while moving forward)    */
-#define CAR_REV_ACCEL   8.0f   /* m/s^2 reversing                           */
-#define CAR_DRAG        0.25f  /* /s   lumped aero+rolling (vmax=accel/drag)*/
-#define CAR_SPEED_MAX  80.0f
-#define CAR_SPEED_MIN -12.0f
-#define CAR_TURN_RADIUS 5.0f   /* m    low-speed steering-lock radius       */
-#define CAR_GRIP_LAT    8.0f   /* m/s^2 lateral grip cap (yawrate = g/v)    */
-#define CAR_GRAVITY     9.8f
-#define CAR_WALL_STEP   1.2f   /* m    ground rise in one step = a wall     */
-#define CAR_WHEELBASE   3.2f   /* Stag: FWLL z 2.24 - BWLL z -0.95          */
-#define CAR_HALFTRACK   0.9f
-#define CAR_LEAN_RATE  10.0f   /* /s   orientation smoothing toward terrain */
 
 typedef struct {
     float x, y, z;
     float yaw;          /* heading; model +Z (BDYF nose) faces along it */
-    float speed;        /* signed, along heading                        */
-    float vy;           /* vertical velocity (airborne)                 */
     int   grounded;
-    float R[9];         /* orientation (row-major), smoothed            */
+    float R[9];         /* orientation (row-major)                      */
 } DriveCar;
 
 static void car_init(DriveCar *c, const Scene *s, float hscale)
@@ -617,9 +593,8 @@ static void car_init(DriveCar *c, const Scene *s, float hscale)
     c->R[6] = -1; c->R[7] = 0; c->R[8] = 0;
 }
 
-/* Drive input: the bound actions (input.map throttle_up/down, steer_left/
- * right — keypad arrows by default; the grey arrows belong to the camera),
- * plus WASD as a dev convenience. */
+/* Drive input: the original's bound actions (input.map; keypad arrows by
+ * default, the grey arrows belong to the camera). */
 typedef struct {
     int throttle_up, throttle_down, steer_left, steer_right;
     int throttle, steer, ebrake, start_engine, shift_up, shift_down, reverse;
@@ -980,7 +955,6 @@ void worldview_run(const char *mission_path, RenderMode mode)
     const RenderTexture *ter_render_tex = s_terrain_tex
         ? gpu_tex_for(s_terrain_tex) : gpu_tex_for_flat(s_terrain_idx);
 
-    /* Road: flat dark asphalt for now (a road .map is a follow-up). */
     /* Road textures: the original's 30 (or the mission's .rtm list). A
      * missing one falls back to flat asphalt (the original aborts:
      * "Road texture not found"). */
@@ -1217,7 +1191,6 @@ void worldview_run(const char *mission_path, RenderMode mode)
             vehsim_frame(&sim, &vworld, dt);
             vehsim_matrix(&sim, car.R);
             car.x = (float)sim.pos[0]; car.y = (float)sim.pos[1]; car.z = (float)sim.pos[2];
-            car.speed = sim.speed;
             car.grounded = !(sim.flags & 4);
             car.yaw = atan2f(sim.axes[2][0], sim.axes[2][2]);
             veh_t[0] = car.x; veh_t[1] = car.y; veh_t[2] = car.z;
