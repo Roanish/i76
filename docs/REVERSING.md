@@ -978,6 +978,52 @@ purpose (the original's 150 + fog is a fidelity feature for later).
 
 ---
 
+## Camera views + the external (track) camera (2026-11-22)
+
+Bodies seen (headless, mostly force-created): view handlers + per-frame callbacks below,
+entity_spawn 00453d50, bbox 0045a770, radius 0045a5d0, key handler 0043e2c0, cockpit/external
+toggle 0043e230 / default 0043e210, track callback 00435330.
+
+**Command → view.** Input commands (table ~004f47d0, {name ptr, id}): COCKPIT_VIEW 1,
+FREEEYE_VIEW 2, CHASE_VIEW 3, OVER_VIEW 4, TRACK_VIEW 5, …, PRESET_VIEW_1..12 = 0x0e..0x19,
+TOGGLE_REARVIEW 0x0b. Key handler 0043e2c0 passes 0x0e..0x19 straight to
+camera_set_view(target, type). 0043e230 toggles cockpit (0x0e) ↔ last external view
+(DAT_00534088, default **0x0f** via 0043e210). (Where commands 1..5 route is not traced ???.)
+
+**camera_set_view** walks g_view_type_table (004f3920, {type, handler}); each handler resets
+the camera (camera_setup, 90° hFOV) and installs a per-frame callback in DAT_004f36b8.
+| view | handler | mode | callback | role |
+|---|---|---|---|---|
+| 0x0d | 004360b0 | 2/0 | 00436320 | cockpit variant ??? |
+| 0x0e | 00435aa0 | 0 | 00435c30 | **cockpit / in-car** (pilot look globals 004f38fc..3910) |
+| 0x0f | 00437020 | 7 | **00435330** | **external track camera (default external)** |
+| 0x10, 0x15, 0x16 | 00436ad0, 00437770, 004378f0 | 1 | 00436c50 | external, pitch/dist + terrain ??? |
+| 0x11 | 00436680 | 1 | 00436800 | pilot-look globals ??? |
+| 0x12 | 00438580 | 8 | 004386c0 | saved-view stack ??? |
+| 0x13, 0x14 | 004374d0, 00437620 | 1 | 004373c0 | 004f38c8..38d8 + terrain ??? |
+| 0x17 | 00437a70 | 3 | 00437b90 | 004f38ac + terrain ??? |
+| 0x18 / 0x19 | 00437cd0 / 004381b0 | 4 | 00437de0 / 004382c0 | saved-view stack ??? |
+| 0x1a | 00435f80 | 0 | 00435c30 | startup view (cockpit) |
+| 0x1b | 004371b0 | 9 | 004373c0 | ??? |
+| 0xfefe | 004383f0 | 6 | 00434d10 | track-like (special) ??? |
+
+**Camera target** (entity_spawn 00453d50; the entity with flag 0x10 becomes DAT_005530c4):
+`[0]` entity, `[1..3]` look-at = bounding-box CENTRE in the entity frame ((min+max)×0.5, box over
+the whole part tree, 0045a770), `[4]` = bounding RADIUS about that centre (√max vertex dist², 0045a5d0).
+
+**Track camera (00435330), per frame:**
+- targets: pitch −= axis×(π/180), clamped [1°, 90°]; yaw −= axis×(π/180), wrapped ±π (input axes
+  005348c4 / 005348cc); distance = axis 005348bc clamped [1, 10]. Defaults pitch π/6, dist 5.5.
+- smoothing: s = 2·dt; if 0 ≤ s ≤ 0.95 and |target − current| ≥ 0.005, current += s·(target −
+  current), else snap. Orientation: slerp (0049b7e0) of a stored quat toward the target entity's
+  orientation (00435240) by s, with hemisphere flip → the camera LAGS the car's rotation.
+- world distance = dist × radius, capped 150.
+- matrix: translate (0,0,−d) · rotX(pitch) · rotY(yaw) · R(slerped quat) · translate(look-at
+  point in world).
+- ground: h = terrain_height_sample(cam x,z); if camY − 0.1 < h + 0.5 then camY = h + 0.6
+  (constants 004c20c8 −0.5, 004c20d0 0.1, 004c20d8 −0.1). Only the camera point is tested — no
+  line-of-sight test to the car.
+
 ## Input bindings — input.map / gamekey.map (2026-11-22)
 
 Bodies seen: input.map parser 00440620 + chord 004403f0, key-name→channel 0043fd20, device

@@ -24,6 +24,8 @@
 #include "engine/vehicle.h"
 #include "engine/mods.h"         /* asset_present_file (palette) */
 #include "engine/lighting.h"     /* time-of-day global light */
+#include "engine/keybind.h"      /* original input.map / gamekey.map bindings */
+#include "engine/trackcam.h"     /* original external track camera (view 0x0f) */
 #include "engine/pix.h"          /* vfs_lod (.lum: lighting is not moddable) */
 #include "engine/texture.h"
 #include "render/render.h"
@@ -81,9 +83,9 @@ static void mat_perspective(float m[16], float fovy, float aspect,
     m[14] = (zfar * znear) / (znear - zfar);
 }
 
-static void mat_lookat(float m[16], const float eye[3], const float fwd[3])
+static void mat_lookat_up(float m[16], const float eye[3], const float fwd[3], const float upv[3])
 {
-    float wup[3] = {0,1,0};
+    float wup[3] = { upv[0], upv[1], upv[2] };
     float f[3] = { fwd[0], fwd[1], fwd[2] }; vnorm(f);
     float s[3]; vcross(f, wup, s); vnorm(s);
     float u[3]; vcross(s, f, u);
@@ -93,6 +95,7 @@ static void mat_lookat(float m[16], const float eye[3], const float fwd[3])
     m[2]=-f[0];m[6]=-f[1];m[10]=-f[2]; m[14]= vdot(f,eye);
     m[3]=0;    m[7]=0;    m[11]=0;     m[15]=1;
 }
+
 
 /* SceneItem world transform (R row-major 3x3 + t) -> column-major model mat4. */
 static void item_model(float m[16], const float R[9], const float t[3])
@@ -239,6 +242,14 @@ static float sample_terrain_y(const Scene *s, float x, float z, float hscale)
     return (hx0 + (hx1 - hx0) * tz) * (TERRAIN_Y_SCALE * hscale);
 }
 
+/* Ground query for the track camera (terrain_height_sample equivalent). */
+typedef struct { const Scene *scene; float hscale; } TerrainGroundCtx;
+static float terrain_ground_cb(void *ud, float x, float z)
+{
+    const TerrainGroundCtx *g = ud;
+    return sample_terrain_y(g->scene, x, z, g->hscale);
+}
+
 /* Build the road ribbon as a [px,py,pz, u,v] triangle soup, draped on terrain.
  * Consecutive ribs form quads; a large XZ jump (junction / loop seam) splits the
  * strip so no quad spans the gap. Roads lift slightly above the ground. */
@@ -325,13 +336,18 @@ static void car_init(DriveCar *c, const Scene *s, float hscale)
     c->R[6] = -1; c->R[7] = 0; c->R[8] = 0;
 }
 
+/* Drive input: the bound actions (input.map throttle_up/down, steer_left/
+ * right — keypad arrows by default; the grey arrows belong to the camera),
+ * plus WASD as a dev convenience. */
+typedef struct { int throttle_up, throttle_down, steer_left, steer_right; } DriveActions;
+
 static void car_tick(DriveCar *c, const Scene *s, const RawInputState *in,
-                     float dt, float hscale)
+                     const DriveActions *da, float dt, float hscale)
 {
-    float steer    = (in->held[PK_D] || in->held[PK_RIGHT] ? 1.0f : 0.0f)
-                   - (in->held[PK_A] || in->held[PK_LEFT]  ? 1.0f : 0.0f);
-    int   throttle = in->held[PK_W] || in->held[PK_UP];
-    int   brake    = in->held[PK_S] || in->held[PK_DOWN];
+    float steer    = (in->held[PK_D] || keybind_button(da->steer_right) ? 1.0f : 0.0f)
+                   - (in->held[PK_A] || keybind_button(da->steer_left)  ? 1.0f : 0.0f);
+    int   throttle = in->held[PK_W] || keybind_button(da->throttle_up);
+    int   brake    = in->held[PK_S] || keybind_button(da->throttle_down);
 
     /* Longitudinal: throttle / brake-then-reverse / drag. */
     if (throttle) c->speed += (in->held[PK_LSHIFT] ? CAR_ACCEL_BOOST : CAR_ACCEL) * dt;
@@ -775,7 +791,11 @@ void worldview_run(const char *mission_path, RenderMode mode)
     float pitch = atan2f(to[1], sqrtf(to[0]*to[0] + to[2]*to[2]));
 
     float base_speed = scene->radius * 0.8f;  if (base_speed < 20.0f) base_speed = 20.0f;
-    float znear = scene->radius * 0.01f;       if (znear < 0.5f)    znear = 0.5f;
+    /* Near plane is camera-relative, NOT scene-sized: the track camera sits
+     * ~9 units from the car, and a scene-scaled near (N01: r 917 -> 9.2) cut
+     * away everything in front of it — the ground across the bottom of the
+     * screen. D32_SFLOAT depth keeps the far range usable at this ratio. */
+    float znear = 0.25f;
     float zfar  = scene->radius * 40.0f;       if (zfar  < 5000.0f) zfar  = 5000.0f;
 
     /* Player car (drive mode): starts at the scene centre, on the ground;
@@ -784,6 +804,56 @@ void worldview_run(const char *mission_path, RenderMode mode)
     DriveCar car;
     car_init(&car, scene, HS[hs_idx]);
     int drive = 0;
+
+    /* Original key bindings (input.map + gamekey.map from the asset root). */
+    keybind_load();
+    DriveActions da = { keybind_action("throttle_up"), keybind_action("throttle_down"),
+                        keybind_action("steer_left"),  keybind_action("steer_right") };
+    int ax_pitch = keybind_action("track_pitch_delta");
+    int ax_yaw   = keybind_action("track_yaw_delta");
+    int ax_dist  = keybind_action("track_distance");
+    int cmd_view_first = keybind_command_id("PRESET_VIEW_1");   /* 0x0e */
+    int cmd_view_last  = keybind_command_id("PRESET_VIEW_12");  /* 0x19 */
+    int view_type = 0x0f;          /* default external view (0043e210) */
+    TrackCam tcam;
+    trackcam_reset(&tcam);
+
+    /* Camera target = the car's bounding-box centre + radius over its whole
+     * part tree (entity_spawn 00453d50: bbox 0045a770, (min+max)*0.5; radius
+     * 0045a5d0 = max vertex distance from the centre), in the car's frame. */
+    float car_centre[3] = { 0, 1, 0 }, car_radius = 3.0f;
+    if (veh) {
+        float mn[3] = { 1e7f, 1e7f, 1e7f }, mx[3] = { -1e7f, -1e7f, -1e7f };
+        for (int pass = 0; pass < 2; pass++) {
+            float r2max = 0;
+            for (int i = 0; i < veh->count; i++) {
+                const GeoMesh *m = veh->parts[i].mesh;
+                if (!m) continue;
+                for (int v = 0; v < m->num_verts; v++) {
+                    float p[3];
+                    mat3_vec(veh->parts[i].R, &m->verts[v * 3], p);
+                    for (int k = 0; k < 3; k++) p[k] += veh->parts[i].t[k];
+                    if (pass == 0) {
+                        for (int k = 0; k < 3; k++) {
+                            if (p[k] < mn[k]) mn[k] = p[k];
+                            if (p[k] > mx[k]) mx[k] = p[k];
+                        }
+                    } else {
+                        float d2 = 0;
+                        for (int k = 0; k < 3; k++) d2 += (p[k] - car_centre[k]) * (p[k] - car_centre[k]);
+                        if (d2 > r2max) r2max = d2;
+                    }
+                }
+            }
+            if (pass == 0) for (int k = 0; k < 3; k++) car_centre[k] = (mn[k] + mx[k]) * 0.5f;
+            else car_radius = sqrtf(r2max);
+        }
+        fprintf(stdout, "[worldview] car camera target: centre %.2f %.2f %.2f, radius %.2f\n",
+                car_centre[0], car_centre[1], car_centre[2], car_radius);
+    }
+    TerrainGroundCtx gctx = { scene, HS[hs_idx] };
+    float cam_up[3] = { 0, 1, 0 };
+    char view_msg[64] = "";
     int orbit = 0;
     /* Orbit camera about the car: yaw/pitch around it, distance = zoom. */
     float orb_yaw = 0.0f, orb_pitch = 0.35f, orb_dist = 8.0f;
@@ -806,6 +876,17 @@ void worldview_run(const char *mission_path, RenderMode mode)
         if (dt > 0.1f) dt = 0.1f;
 
         RawInputState in; input_poll_raw(&in);
+        keybind_update(&in, dt);
+        for (int cmd; (cmd = keybind_next_command()) != 0; ) {
+            if (cmd >= cmd_view_first && cmd <= cmd_view_last) {
+                /* PRESET_VIEW_n -> camera_set_view(type = command id). */
+                view_type = cmd;
+                if (view_type == 0x0f) snprintf(view_msg, sizeof view_msg, "VIEW 0x0f TRACK");
+                else snprintf(view_msg, sizeof view_msg, "VIEW 0x%02x not implemented (track)", view_type);
+            }
+        }
+        gctx.hscale = HS[hs_idx];
+        cam_up[0] = 0; cam_up[1] = 1; cam_up[2] = 0;
         if (in.quit) break;
         if (in.pressed[PK_TAB])
             mode = (mode == RENDER_SOFTWARE) ? RENDER_HARDWARE : RENDER_SOFTWARE;
@@ -847,24 +928,17 @@ void worldview_run(const char *mission_path, RenderMode mode)
             vsub(focus, eye, fwd);
             vnorm(fwd);
         } else if (drive) {
-            car_tick(&car, scene, &in, dt, HS[hs_idx]);
+            car_tick(&car, scene, &in, &da, dt, HS[hs_idx]);
             veh_t[0] = car.x; veh_t[1] = car.y; veh_t[2] = car.z;
 
-            /* Track (chase) camera — defaults reversed from nitro.exe camera
-             * init: track_distance 5.5 (0x40b00000), track_pitch pi/6
-             * (0x3f060a92). Rigid horizontal-heading mount, aimed at the car;
-             * clamped just above the terrain so it can't dip underground. */
-            const float cam_dist = 5.5f, cam_pitch = 0.5235988f;
-            float dx = cosf(car.yaw), dz = sinf(car.yaw);
-            eye[0] = car.x - dx * cam_dist * cosf(cam_pitch);
-            eye[1] = car.y + cam_dist * sinf(cam_pitch);
-            eye[2] = car.z - dz * cam_dist * cosf(cam_pitch);
-            float cam_floor = sample_terrain_y(scene, eye[0], eye[2], HS[hs_idx]) + 0.4f;
-            if (eye[1] < cam_floor) eye[1] = cam_floor;
-            fwd[0] = car.x - eye[0];
-            fwd[1] = (car.y + 1.0f) - eye[1];
-            fwd[2] = car.z - eye[2];
-            vnorm(fwd);
+            /* The original external track camera (view 0x0f, FUN_00435330),
+             * aimed at the car's bbox centre, driven by track_* bindings. */
+            float lookat[3];
+            mat3_vec(car.R, car_centre, lookat);
+            lookat[0] += car.x; lookat[1] += car.y; lookat[2] += car.z;
+            trackcam_update(&tcam, car.R, lookat, car_radius,
+                            keybind_axis(ax_pitch), keybind_axis(ax_yaw), keybind_axis(ax_dist),
+                            dt, terrain_ground_cb, &gctx, eye, fwd, cam_up);
         } else {
             /* Free-fly: arrows look, WASD/QE move, Shift boost. */
             float look = 1.4f * dt;
@@ -915,7 +989,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
          * deliberately keeps its long draw distance instead.) */
         float fovy = 2.0f * atanf(tanf(0.25f * (float)M_PI) * (float)FB_H / (float)FB_W);
         float view[16], proj[16], identity[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-        mat_lookat(view, eye, fwd);
+        mat_lookat_up(view, eye, fwd, cam_up);
         mat_perspective(proj, fovy, (float)FB_W / FB_H, znear, zfar);
 
         render_begin_frame();
@@ -972,9 +1046,10 @@ void worldview_run(const char *mission_path, RenderMode mode)
                 snprintf(line, sizeof line, "%s   %s   ORBIT  dist %.1f   (arrows/WASD rotate, Q/E zoom, O exit)",
                          mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE", orb_dist);
             else if (drive)
-                snprintf(line, sizeof line, "%s   %s   DRIVE  %3.0f mph%s",
+                snprintf(line, sizeof line, "%s   %s   DRIVE  %3.0f mph%s   TRACK pitch %.0f yaw %.0f dist %.1fx  %s",
                          mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE",
-                         fabsf(car.speed) * 2.237f, car.grounded ? "" : "  AIR");
+                         fabsf(car.speed) * 2.237f, car.grounded ? "" : "  AIR",
+                         tcam.pitch * 57.29578f, tcam.yaw * 57.29578f, tcam.dist, view_msg);
             else
                 snprintf(line, sizeof line, "%s   %s   FLY  eye %.0f %.0f %.0f   hscale %.2f",
                          mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE",
@@ -985,7 +1060,9 @@ void worldview_run(const char *mission_path, RenderMode mode)
                      wl.phase, wl.is_day ? "SUN" : "MOON", wl.angle * 57.29578f, wl.intensity,
                      mode == RENDER_SOFTWARE ? "   (SW: unlit)" : "");
             font_draw(font, line, fb, FB_W, FB_H, 8, 20, IDX_TEXT);
-            font_draw(font, "SPACE DRIVE/FLY  O ORBIT  L HOUR+3  WASD/ARROWS  SHIFT BOOST  P HSCALE  TAB SW/HW  ESC",
+            font_draw(font, drive
+                      ? "DRIVE: KEYPAD ARROWS (input.map) or WASD   CAMERA: GREY ARROWS  PGUP/PGDN DIST  F2 TRACK   SPACE FLY  ESC"
+                      : "SPACE DRIVE/FLY  O ORBIT  L HOUR+3  WASD/ARROWS  SHIFT BOOST  P HSCALE  TAB SW/HW  ESC",
                       fb, FB_W, FB_H, 8, FB_H - 16, IDX_DIM);
         }
 
