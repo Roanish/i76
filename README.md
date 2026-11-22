@@ -78,6 +78,31 @@ One line per milestone, newest first. The full detail is in the git history and 
 - Multiplayer
 - Full editor / asset pipeline tooling
 
+## Game Files
+
+No game assets are included; they are copyrighted. You need your own install of Interstate '76
+Nitro Pack (developed against the GOG release). Point `--assets` at the install folder; nothing
+needs copying or extracting.
+
+From the install, the engine reads exactly these 10 files. Everything else it uses (vehicles,
+meshes, textures, terrain textures, physics and engine data) comes from inside `nitro.zfs`.
+
+| File in the install | What it is | |
+|---------------------|------------|--|
+| `nitro.zix` | Archive index | required |
+| `nitro.zfs` | The main archive | required |
+| `miss8/N01.CBT` | The default mission | required |
+| `miss8/N01.TER` | Its terrain | required |
+| `input.map` | Original key bindings (held actions) | required |
+| `gamekey.map` | Original key bindings (commands) | required |
+| `base6x7.fnt` | HUD font | required |
+| `smk/INTROF01.SMK` | Intro video | optional, skipped if missing |
+| `smk/CREDF01.SMK` | Credits video | optional, skipped if missing |
+| `addon/LOADGAME.PCX` | Loading screen | optional, skipped if missing |
+
+This list comes from logging every file opened during a full run against the GOG install
+(2026-11-22). It grows as more of the game is implemented.
+
 ## Building
 
 ```bash
@@ -105,7 +130,8 @@ seconds will drop you into the driving mode (F toggles free-fly / drive).
 This "worldview" is my test bed. Everything here is real engine, as built at the time of release.
 
 
-Assets are your own i76 packages or install. I will not provide original assets here.
+Assets are your own i76 packages or install. I will not provide original assets here. See [Game Files](#game-files)
+for exactly which files are needed.
 
 ## Running
 
