@@ -26,6 +26,7 @@
 #include "engine/lighting.h"     /* time-of-day global light */
 #include "engine/keybind.h"      /* original input.map / gamekey.map bindings */
 #include "engine/trackcam.h"     /* original external track camera (view 0x0f) */
+#include "engine/vehsim.h"       /* the original vehicle simulation */
 #include "engine/pix.h"          /* vfs_lod (.lum: lighting is not moddable) */
 #include "engine/texture.h"
 #include "engine/fidelity.h"      /* --legacy: faithful paths */
@@ -252,6 +253,49 @@ static float terrain_ground_cb(void *ud, float x, float z)
 {
     const TerrainGroundCtx *g = ud;
     return sample_terrain_y(g->scene, x, z, g->hscale);
+}
+
+/* Surface type (0..7) of the global cell (gx, gz); 5 outside the map. */
+static int cell_surface(const Scene *s, long gx, long gz)
+{
+    for (int i = 0; i < s->patch_count; i++) {
+        const TerrainPatch *p = &s->patches[i];
+        long lx = gx - (long)lroundf(p->origin[0] / p->cell);
+        long lz = gz - (long)lroundf(p->origin[1] / p->cell);
+        if (lx < 0 || lz < 0 || lx >= p->dim || lz >= p->dim) continue;
+        return p->surface ? p->surface[lz * p->dim + lx] : 0;
+    }
+    return 5;
+}
+
+/* Vehicle ground query: bilinear height, the face normal of the heightfield
+ * triangle under (x, z), and the cell's surface type. Terrain only for now
+ * (see docs/REVERSING.md "Ground contact query"). */
+static float vehsim_ground_cb(void *ud, float x, float y, float z, float n[3], int *surf)
+{
+    (void)y;
+    const TerrainGroundCtx *g = ud;
+    const Scene *s = g->scene;
+    float h = sample_terrain_y(s, x, z, g->hscale);
+    if (s->patch_count == 0) { n[0] = 0; n[1] = 1; n[2] = 0; *surf = 5; return h; }
+    float cell = s->patches[0].cell;
+    float cx = x / cell, cz = z / cell;
+    long fx = (long)floorf(cx), fz = (long)floorf(cz);
+    float tx = cx - fx, tz = cz - fz;
+    float h00 = cell_h12(s, fx, fz), h10 = cell_h12(s, fx + 1, fz);
+    float h01 = cell_h12(s, fx, fz + 1), h11 = cell_h12(s, fx + 1, fz + 1);
+    if (h10 < 0) h10 = h00;
+    if (h01 < 0) h01 = h00;
+    if (h11 < 0) h11 = h00;
+    float dX, dZ;
+    if (tz <= tx) { dX = h10 - h00; dZ = h11 - h10; }
+    else          { dX = h11 - h01; dZ = h01 - h00; }
+    float k = (1.0f / cell) * TERRAIN_Y_SCALE * g->hscale;
+    dX *= k; dZ *= k;
+    float r = 1.0f / sqrtf(dX * dX + dZ * dZ + 1.0f);
+    n[0] = -dX * r; n[1] = r; n[2] = -dZ * r;
+    *surf = cell_surface(s, fx, fz);
+    return h;
 }
 
 /* Height on terrain mesh triangle `h` (0: corners 00,10,11; 1: 00,11,01) of
@@ -571,93 +615,11 @@ static void car_init(DriveCar *c, const Scene *s, float hscale)
 /* Drive input: the bound actions (input.map throttle_up/down, steer_left/
  * right — keypad arrows by default; the grey arrows belong to the camera),
  * plus WASD as a dev convenience. */
-typedef struct { int throttle_up, throttle_down, steer_left, steer_right; } DriveActions;
+typedef struct {
+    int throttle_up, throttle_down, steer_left, steer_right;
+    int throttle, steer, ebrake, start_engine, shift_up, shift_down, reverse;
+} DriveActions;
 
-static void car_tick(DriveCar *c, const Scene *s, const RawInputState *in,
-                     const DriveActions *da, float dt, float hscale)
-{
-    float steer    = (in->held[PK_D] || keybind_button(da->steer_right) ? 1.0f : 0.0f)
-                   - (in->held[PK_A] || keybind_button(da->steer_left)  ? 1.0f : 0.0f);
-    int   throttle = in->held[PK_W] || keybind_button(da->throttle_up);
-    int   brake    = in->held[PK_S] || keybind_button(da->throttle_down);
-
-    /* Longitudinal: throttle / brake-then-reverse / drag. */
-    if (throttle) c->speed += (in->held[PK_LSHIFT] ? CAR_ACCEL_BOOST : CAR_ACCEL) * dt;
-    if (brake)    c->speed -= (c->speed > 0.5f ? CAR_BRAKE : CAR_REV_ACCEL) * dt;
-    c->speed -= c->speed * CAR_DRAG * dt;
-    if (c->speed > CAR_SPEED_MAX) c->speed = CAR_SPEED_MAX;
-    if (c->speed < CAR_SPEED_MIN) c->speed = CAR_SPEED_MIN;
-
-    /* Steering: yaw rate = v/R at low speed (steering lock), grip-capped
-     * (a_lat <= CAR_GRIP_LAT => yawrate <= g/v) at high speed. Sign follows
-     * the velocity so reversing steers like a real car. No steering in air. */
-    float av = fabsf(c->speed);
-    if (c->grounded && av > 0.05f) {
-        float yr = av / CAR_TURN_RADIUS;
-        float cap = CAR_GRIP_LAT / av;
-        if (cap < yr) yr = cap;
-        c->yaw += steer * yr * (c->speed < 0 ? -1.0f : 1.0f) * dt;
-    }
-    float dx = cosf(c->yaw), dz = sinf(c->yaw);
-
-    /* Horizontal move, blocked by walls (a big ground step in one frame). */
-    float nx = c->x + dx * c->speed * dt;
-    float nz = c->z + dz * c->speed * dt;
-    float g_ahead = sample_terrain_y(s, nx, nz, hscale);
-    if (c->grounded && g_ahead - c->y > CAR_WALL_STEP) {
-        c->speed = -c->speed * 0.1f;           /* thump into the cliff */
-    } else {
-        c->x = nx;
-        c->z = nz;
-    }
-
-    /* Vertical: gravity, then the terrain is a hard floor. Cresting a ridge
-     * leaves the ground (y stays, gravity arcs it down); slopes push the car
-     * up via the clamp. */
-    c->vy -= CAR_GRAVITY * dt;
-    c->y += c->vy * dt;
-    float ground = sample_terrain_y(s, c->x, c->z, hscale);
-    if (c->y <= ground) {
-        c->y = ground;
-        if (c->vy < 0) c->vy = 0;
-        c->grounded = 1;
-    } else {
-        c->grounded = (c->y - ground) < 0.05f;
-    }
-
-    /* Orientation: on the ground, lean the basis into the terrain slope
-     * sampled across the wheelbase/track; airborne keeps the last attitude.
-     * Basis columns = (right, up, fwd); smoothed to avoid step jitter. */
-    if (c->grounded) {
-        float hf = sample_terrain_y(s, c->x + dx * (CAR_WHEELBASE * 0.5f),
-                                       c->z + dz * (CAR_WHEELBASE * 0.5f), hscale);
-        float hb = sample_terrain_y(s, c->x - dx * (CAR_WHEELBASE * 0.5f),
-                                       c->z - dz * (CAR_WHEELBASE * 0.5f), hscale);
-        float hr = sample_terrain_y(s, c->x + dz * CAR_HALFTRACK,
-                                       c->z - dx * CAR_HALFTRACK, hscale);
-        float hl = sample_terrain_y(s, c->x - dz * CAR_HALFTRACK,
-                                       c->z + dx * CAR_HALFTRACK, hscale);
-        float f[3] = { dx * CAR_WHEELBASE, hf - hb, dz * CAR_WHEELBASE };
-        float r[3] = { dz * CAR_HALFTRACK * 2, hr - hl, -dx * CAR_HALFTRACK * 2 };
-        vnorm(f);
-        float u[3]; vcross(f, r, u); vnorm(u);
-        vcross(u, f, r); vnorm(r);
-        float k = 1.0f - expf(-CAR_LEAN_RATE * dt);
-        float tgt[9] = { r[0], u[0], f[0],
-                         r[1], u[1], f[1],
-                         r[2], u[2], f[2] };
-        for (int i = 0; i < 9; i++) c->R[i] += (tgt[i] - c->R[i]) * k;
-        /* Re-orthonormalise the smoothed basis (columns). */
-        float cf[3] = { c->R[2], c->R[5], c->R[8] };
-        float cr[3] = { c->R[0], c->R[3], c->R[6] };
-        vnorm(cf);
-        float cu[3]; vcross(cf, cr, cu); vnorm(cu);
-        vcross(cu, cf, cr);
-        c->R[0] = cr[0]; c->R[1] = cu[0]; c->R[2] = cf[0];
-        c->R[3] = cr[1]; c->R[4] = cu[1]; c->R[5] = cf[1];
-        c->R[6] = cr[2]; c->R[7] = cu[2]; c->R[8] = cf[2];
-    }
-}
 
 /* ----------------------------------------------------------------------- */
 /* Palettes                                                                  */
@@ -1054,7 +1016,12 @@ void worldview_run(const char *mission_path, RenderMode mode)
     /* Original key bindings (input.map + gamekey.map from the asset root). */
     keybind_load();
     DriveActions da = { keybind_action("throttle_up"), keybind_action("throttle_down"),
-                        keybind_action("steer_left"),  keybind_action("steer_right") };
+                        keybind_action("steer_left"),  keybind_action("steer_right"),
+                        keybind_action("throttle"), keybind_action("steer"),
+                        keybind_action("e_brake"), keybind_action("start_engine"),
+                        keybind_action("shift_up"), keybind_action("shift_down"),
+                        keybind_action("reverse_direction") };
+    int da_prev[4] = { 0, 0, 0, 0 };
     int ax_pitch = keybind_action("track_pitch_delta");
     int ax_yaw   = keybind_action("track_yaw_delta");
     int ax_dist  = keybind_action("track_distance");
@@ -1068,8 +1035,9 @@ void worldview_run(const char *mission_path, RenderMode mode)
      * part tree (entity_spawn 00453d50: bbox 0045a770, (min+max)*0.5; radius
      * 0045a5d0 = max vertex distance from the centre), in the car's frame. */
     float car_centre[3] = { 0, 1, 0 }, car_radius = 3.0f;
+    float mn[3] = { -1, 0, -2 }, mx[3] = { 1, 1.5f, 2 };      /* body box */
     if (veh) {
-        float mn[3] = { 1e7f, 1e7f, 1e7f }, mx[3] = { -1e7f, -1e7f, -1e7f };
+        for (int k = 0; k < 3; k++) { mn[k] = 1e7f; mx[k] = -1e7f; }
         for (int pass = 0; pass < 2; pass++) {
             float r2max = 0;
             for (int i = 0; i < veh->count; i++) {
@@ -1098,6 +1066,25 @@ void worldview_run(const char *mission_path, RenderMode mode)
                 car_centre[0], car_centre[1], car_centre[2], car_radius);
     }
     TerrainGroundCtx gctx = { scene, HS[hs_idx] };
+
+    /* Vehicle simulation for the drive mode. */
+    TerrainGroundCtx vctx = { scene, HS[hs_idx] };
+    VsWorld vworld = { vehsim_ground_cb, &vctx, {0}, {0}, {0}, {0} };
+    for (int i = 0; i < 8; i++) {
+        /* Missions without a surface table use a common default. */
+        vworld.grip[i]   = scene->have_surfaces ? scene->surf_grip[i]   : 1.9f;
+        vworld.roll[i]   = scene->have_surfaces ? scene->surf_roll[i]   : 0.03f;
+        vworld.bump[i]   = scene->have_surfaces ? scene->surf_bump[i]   : 0.0f;
+        vworld.effect[i] = scene->have_surfaces ? scene->surf_effect[i] : 0;
+    }
+    VsParams vparams;
+    VehSim sim;
+    if (!vehsim_params_load(&vparams, "vdstag1.vcf", veh, mn, mx))
+        fprintf(stderr, "[worldview] vehsim: vehicle data missing; defaults in use\n");
+    {
+        float f0[3] = { 1, 0, 0 };
+        vehsim_spawn(&sim, &vparams, &vworld, car.x, car.z, f0);
+    }
     float cam_up[3] = { 0, 1, 0 };
     char view_msg[64] = "";
     int orbit = 0;
@@ -1134,7 +1121,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
         gctx.hscale = HS[hs_idx];
         cam_up[0] = 0; cam_up[1] = 1; cam_up[2] = 0;
         if (in.quit) break;
-        if (in.pressed[PK_TAB])
+        if (in.pressed[PK_TAB] && !drive)   /* in drive mode TAB is reverse */
             mode = (mode == RENDER_SOFTWARE) ? RENDER_HARDWARE : RENDER_SOFTWARE;
         if (in.pressed[PK_O]) {
             orbit = !orbit;
@@ -1174,7 +1161,30 @@ void worldview_run(const char *mission_path, RenderMode mode)
             vsub(focus, eye, fwd);
             vnorm(fwd);
         } else if (drive) {
-            car_tick(&car, scene, &in, &da, dt, HS[hs_idx]);
+            /* Driver controls: analog axes or the digital keys (WASD too);
+             * toggle actions act on the press. */
+            VsControls vc = {0};
+            vc.throttle_axis = (float)keybind_axis(da.throttle) * (1.0f / 65536.0f);
+            vc.steer_axis    = (float)keybind_axis(da.steer)    * (1.0f / 65536.0f);
+            vc.throttle_up   = keybind_button(da.throttle_up)   || in.held[PK_W];
+            vc.throttle_down = keybind_button(da.throttle_down) || in.held[PK_S];
+            vc.steer_left    = keybind_button(da.steer_left)    || in.held[PK_A];
+            vc.steer_right   = keybind_button(da.steer_right)   || in.held[PK_D];
+            vc.ebrake        = keybind_button(da.ebrake);
+            int now[4] = { keybind_button(da.start_engine), keybind_button(da.shift_up),
+                           keybind_button(da.shift_down), keybind_button(da.reverse) };
+            vc.start_engine = now[0] && !da_prev[0];
+            vc.shift_up     = now[1] && !da_prev[1];
+            vc.shift_down   = now[2] && !da_prev[2];
+            vc.reverse      = now[3] && !da_prev[3];
+            memcpy(da_prev, now, sizeof now);
+            vehsim_controls(&sim, &vc, dt);
+            vehsim_frame(&sim, &vworld, dt);
+            vehsim_matrix(&sim, car.R);
+            car.x = (float)sim.pos[0]; car.y = (float)sim.pos[1]; car.z = (float)sim.pos[2];
+            car.speed = sim.speed;
+            car.grounded = !(sim.flags & 4);
+            car.yaw = atan2f(sim.axes[2][0], sim.axes[2][2]);
             veh_t[0] = car.x; veh_t[1] = car.y; veh_t[2] = car.z;
 
             /* The original external track camera (view 0x0f, FUN_00435330),
@@ -1311,9 +1321,10 @@ void worldview_run(const char *mission_path, RenderMode mode)
                 snprintf(line, sizeof line, "%s   %s   ORBIT  dist %.1f   (arrows/WASD rotate, Q/E zoom, O exit)",
                          mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE", orb_dist);
             else if (drive)
-                snprintf(line, sizeof line, "%s   %s   DRIVE  %3.0f mph%s   TRACK pitch %.0f yaw %.0f dist %.1fx  %s",
+                snprintf(line, sizeof line, "%s   %s   DRIVE %c gear %d  %4.0f rpm  %3.0f mph%s%s   TRACK pitch %.0f yaw %.0f dist %.1fx  %s",
                          mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE",
-                         fabsf(car.speed) * 2.237f, car.grounded ? "" : "  AIR",
+                         "PRND21"[sim.selector % 6], sim.e.gear, sim.e.rpm, sim.e.speedo,
+                         car.grounded ? "" : "  AIR", (sim.flags & 2) ? "  SKID" : "",
                          tcam.pitch * 57.29578f, tcam.yaw * 57.29578f, tcam.dist, view_msg);
             else
                 snprintf(line, sizeof line, "%s   %s   FLY  eye %.0f %.0f %.0f   hscale %.2f",
