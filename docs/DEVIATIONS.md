@@ -96,10 +96,14 @@ Unconfirmed reverse-engineering is marked `???` (see docs/REVERSING.md).
 - **legacy: n/a** (temporary).
 
 ### World-viewer keys
-- The development viewer binds TAB, SPACE, L, O and others, some of which clash with the
-  original bindings (TAB = reverse_direction, SPACE = weapon_fire, L = weapon_link).
+- In drive mode the viewer uses the original bindings only. Its own keys sit on keys the
+  original leaves free: F (fly / drive), O (orbit), Shift+L (time of day; plain L is
+  weapon_link), and ESC to quit. Fly and orbit mode are viewer-only, so their keys (W A S D,
+  Q / E, arrows, Shift, TAB, P) do not apply to the original. The HUD shows viewer keys in
+  orange.
 - **legacy: n/a** (development tool).
 
 ## Additions (not deviations)
 
 - **Mod layer:** presentation-only overrides (docs/MODDING.md). Faithful run: `--no-mods`.
+- **Video skip hint:** "Press space to skip" over the intro videos. Hidden under `--legacy`.

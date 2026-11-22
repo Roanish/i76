@@ -145,6 +145,8 @@ Moved from the code (src/platform/platform.h):
   0x3f060a92, 0x3f9c61aa, 0x3fa78d36, 0x3f75be0b, 0x3e32b8c2, 0x3f490fda; haze DAT_00617ffc =
   0x3f3fe4a6, DAT_00618000 = 0x39dad16a; the shade-row stage is FUN_00496a00 (8064/256).
 - Track camera constants (moved from src/engine/trackcam.c) are at 0x004c2070..0x004c20d8.
+- Camera target at spawn (moved from src/engine/worldview.c): entity_spawn 00453d50 sets the bbox
+  (0045a770, centre (min+max)·0.5) and radius (0045a5d0, max vertex distance from the centre).
 
 ## Game State Machine
 

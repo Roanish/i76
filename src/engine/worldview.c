@@ -46,6 +46,13 @@
  */
 #define IDX_TEXT  200
 #define IDX_DIM   201
+#define IDX_SHADOW 202
+#define IDX_DEV    203                   /* viewer keys, not the original's */
+
+#define HUD_SCALE   2                    /* font pixels -> framebuffer pixels */
+#define HUD_MARGIN  16
+#define HUD_LINE    (11 * HUD_SCALE)
+#define HUD_KEY_COL (6 * 17 * HUD_SCALE)
 
 /* ----------------------------------------------------------------------- */
 /* Small vec helpers                                                         */
@@ -639,6 +646,31 @@ static uint8_t nearest_index(const Rgb8 *pal, int r, int g, int b)
 /* Load the terrain palette named in the mission's WDEF (e.g. "t15.act", 256x3
  * RGB). Falls back to the shared Nitro palette, then grayscale. The software
  * texel indices and the framebuffer share this palette. */
+/* HUD text at HUD_SCALE with a drop shadow, into the FB_W x FB_H frame. */
+static void hud_text(const Font *f, uint8_t *fb, int x, int y, uint8_t color, const char *t)
+{
+    int w = font_text_width(f, t), h = (int)f->height;
+    if (w <= 0 || h <= 0) return;
+    uint8_t *g = calloc((size_t)w * h, 1);
+    if (!g) return;
+    font_draw(f, t, g, w, h, 0, 0, 1);
+    for (int pass = 0; pass < 2; pass++) {
+        int ox = pass ? 0 : HUD_SCALE, oy = ox;
+        uint8_t c = pass ? color : IDX_SHADOW;
+        for (int gy = 0; gy < h; gy++)
+            for (int gx = 0; gx < w; gx++) {
+                if (!g[gy * w + gx]) continue;
+                for (int dy = 0; dy < HUD_SCALE; dy++)
+                    for (int dx = 0; dx < HUD_SCALE; dx++) {
+                        int px = x + ox + gx * HUD_SCALE + dx, py = y + oy + gy * HUD_SCALE + dy;
+                        if (px >= 0 && px < FB_W && py >= 0 && py < FB_H)
+                            fb[py * FB_W + px] = c;
+                    }
+            }
+    }
+    free(g);
+}
+
 static void load_act_palette(const char *act_name, Rgb8 *pal)
 {
     char actname[28];
@@ -667,6 +699,8 @@ static void load_act_palette(const char *act_name, Rgb8 *pal)
     /* HUD text indices (overwrites 2 palette entries — acceptable for a viewer). */
     pal[IDX_TEXT] = (Rgb8){ 235, 235, 235 };
     pal[IDX_DIM]  = (Rgb8){ 150, 150, 160 };
+    pal[IDX_SHADOW] = (Rgb8){ 0, 0, 0 };
+    pal[IDX_DEV]    = (Rgb8){ 255, 150, 40 };
 }
 
 /* Sky/ground fill indices, resolved against the loaded palette at startup. */
@@ -926,7 +960,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
 
     /* Global light from the mission's time of day (WRLD hour) + its .lum shade
      * table (ambient floor/tint). Base archives only — lighting isn't moddable.
-     * L steps the hour by 3 (one phase) to preview every phase. */
+     * Shift+L steps the hour by 3 (one phase) to preview every phase. */
     size_t lum_sz = 0;
     uint8_t *lum = scene->lum_name[0] ? vfs_lod(scene->lum_name, &lum_sz) : NULL;
     int light_hour = scene->hour;
@@ -1003,7 +1037,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
     float zfar  = scene->radius * 40.0f;       if (zfar  < 5000.0f) zfar  = 5000.0f;
 
     /* Player car (drive mode): starts at the scene centre, on the ground;
-     * SPACE toggles free-fly <-> drive; O toggles orbit (inspect the car) and
+     * F toggles free-fly <-> drive; O toggles orbit (inspect the car) and
      * returns to the previous mode. veh_R/veh_t = its world transform. */
     DriveCar car;
     car_init(&car, scene, HS[hs_idx]);
@@ -1021,15 +1055,15 @@ void worldview_run(const char *mission_path, RenderMode mode)
     int ax_pitch = keybind_action("track_pitch_delta");
     int ax_yaw   = keybind_action("track_yaw_delta");
     int ax_dist  = keybind_action("track_distance");
-    int cmd_view_first = keybind_command_id("PRESET_VIEW_1");   /* 0x0e */
-    int cmd_view_last  = keybind_command_id("PRESET_VIEW_12");  /* 0x19 */
-    int view_type = 0x0f;          /* default external view (0043e210) */
+    int cmd_view_first = keybind_command_id("PRESET_VIEW_1");
+    int cmd_view_last  = keybind_command_id("PRESET_VIEW_12");
+    uint64_t view_msg_until = 0;   /* "only chase cam" notice, shown on a view key */
     TrackCam tcam;
     trackcam_reset(&tcam);
 
     /* Camera target = the car's bounding-box centre + radius over its whole
-     * part tree (entity_spawn 00453d50: bbox 0045a770, (min+max)*0.5; radius
-     * 0045a5d0 = max vertex distance from the centre), in the car's frame. */
+     * part tree, as the original sets at spawn: centre (min+max)*0.5, radius =
+     * max vertex distance from the centre, in the car's frame. */
     float car_centre[3] = { 0, 1, 0 }, car_radius = 3.0f;
     float mn[3] = { -1, 0, -2 }, mx[3] = { 1, 1.5f, 2 };      /* body box */
     if (veh) {
@@ -1082,7 +1116,6 @@ void worldview_run(const char *mission_path, RenderMode mode)
         vehsim_spawn(&sim, &vparams, &vworld, car.x, car.z, f0);
     }
     float cam_up[3] = { 0, 1, 0 };
-    char view_msg[64] = "";
     int orbit = 0;
     /* Orbit camera about the car: yaw/pitch around it, distance = zoom. */
     float orb_yaw = 0.0f, orb_pitch = 0.35f, orb_dist = 8.0f;
@@ -1090,7 +1123,7 @@ void worldview_run(const char *mission_path, RenderMode mode)
     float  veh_t[3] = { car.x, car.y, car.z };
 
     fprintf(stdout, "[worldview] %d objects, %d terrain patches, start=%s. "
-                    "SPACE drive/fly, O orbit car, WASD/arrows, Shift boost, P hscale, TAB SW/HW, ESC.\n",
+                    "F drive/fly, O orbit car, keys listed on screen, ESC quit.\n",
             scene->count, scene->patch_count,
             mode == RENDER_SOFTWARE ? "software" : "hardware");
 
@@ -1099,6 +1132,9 @@ void worldview_run(const char *mission_path, RenderMode mode)
     platform_flush_events();
 
     uint64_t last = platform_get_ticks();
+    /* Show the scene from the opening view, then hand over to driving,
+     * unless F or O is pressed first. */
+    uint64_t auto_drive_at = last + 3500;
     while (1) {
         uint64_t fstart = platform_get_ticks();
         float dt = (float)(fstart - last) / 1000.0f; last = fstart;
@@ -1108,10 +1144,8 @@ void worldview_run(const char *mission_path, RenderMode mode)
         keybind_update(&in, dt);
         for (int cmd; (cmd = keybind_next_command()) != 0; ) {
             if (cmd >= cmd_view_first && cmd <= cmd_view_last) {
-                /* PRESET_VIEW_n -> camera_set_view(type = command id). */
-                view_type = cmd;
-                if (view_type == 0x0f) snprintf(view_msg, sizeof view_msg, "VIEW 0x0f TRACK");
-                else snprintf(view_msg, sizeof view_msg, "VIEW 0x%02x not implemented (track)", view_type);
+                /* Only the external track (chase) camera exists so far. */
+                view_msg_until = platform_get_ticks() + 3000;
             }
         }
         gctx.hscale = HS[hs_idx];
@@ -1124,8 +1158,13 @@ void worldview_run(const char *mission_path, RenderMode mode)
             /* Start behind the car (same side the chase cam looks from). */
             if (orbit) orb_yaw = car.yaw + (float)M_PI;
         }
-        if (in.pressed[PK_SPACE] && !orbit) drive = !drive;
-        if (in.pressed[PK_L]) {
+        if (in.pressed[PK_F] || in.pressed[PK_O]) auto_drive_at = 0;
+        if (auto_drive_at && fstart >= auto_drive_at) {
+            auto_drive_at = 0;
+            if (!orbit) drive = 1;
+        }
+        if (in.pressed[PK_F] && !orbit) drive = !drive;   /* SPACE is weapon_fire */
+        if (in.pressed[PK_L] && in.held[PK_LSHIFT]) {   /* plain L is weapon_link */
             light_hour = ((light_hour < 0 ? 12 : light_hour) + 3) % 24;
             lighting_build(&wl, light_hour, (const uint8_t *)pal_sw, lum, lum_sz);
         }
@@ -1157,15 +1196,15 @@ void worldview_run(const char *mission_path, RenderMode mode)
             vsub(focus, eye, fwd);
             vnorm(fwd);
         } else if (drive) {
-            /* Driver controls: analog axes or the digital keys (WASD too);
-             * toggle actions act on the press. */
+            /* Driver controls: the original bindings only (analog axes or the
+             * digital keys); toggle actions act on the press. */
             VsControls vc = {0};
             vc.throttle_axis = (float)keybind_axis(da.throttle) * (1.0f / 65536.0f);
             vc.steer_axis    = (float)keybind_axis(da.steer)    * (1.0f / 65536.0f);
-            vc.throttle_up   = keybind_button(da.throttle_up)   || in.held[PK_W];
-            vc.throttle_down = keybind_button(da.throttle_down) || in.held[PK_S];
-            vc.steer_left    = keybind_button(da.steer_left)    || in.held[PK_A];
-            vc.steer_right   = keybind_button(da.steer_right)   || in.held[PK_D];
+            vc.throttle_up   = keybind_button(da.throttle_up);
+            vc.throttle_down = keybind_button(da.throttle_down);
+            vc.steer_left    = keybind_button(da.steer_left);
+            vc.steer_right   = keybind_button(da.steer_right);
             vc.ebrake        = keybind_button(da.ebrake);
             int now[4] = { keybind_button(da.start_engine), keybind_button(da.shift_up),
                            keybind_button(da.shift_down), keybind_button(da.reverse) };
@@ -1310,32 +1349,67 @@ void worldview_run(const char *mission_path, RenderMode mode)
             }
         }
 
-        /* HUD text (into fb either way: transparent over HW, atop the SW scene). */
+        /* HUD (into fb either way: transparent over HW, atop the SW scene). */
         if (font) {
+            const char *rmode = mode == RENDER_SOFTWARE ? "SOFTWARE" : "VULKAN";
             char line[160];
+            int y = HUD_MARGIN;
             if (orbit)
-                snprintf(line, sizeof line, "%s   %s   ORBIT  dist %.1f   (arrows/WASD rotate, Q/E zoom, O exit)",
-                         mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE", orb_dist);
+                snprintf(line, sizeof line, "ORBIT   dist %.1f", orb_dist);
             else if (drive)
-                snprintf(line, sizeof line, "%s   %s   DRIVE %c gear %d  %4.0f rpm  %3.0f mph%s%s   TRACK pitch %.0f yaw %.0f dist %.1fx  %s",
-                         mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE",
+                snprintf(line, sizeof line, "DRIVE   %c   gear %d   %4.0f rpm   %3.0f mph%s%s",
                          "PRND21"[sim.selector % 6], sim.e.gear, sim.e.rpm, sim.e.speedo,
-                         car.grounded ? "" : "  AIR", (sim.flags & 2) ? "  SKID" : "",
-                         tcam.pitch * 57.29578f, tcam.yaw * 57.29578f, tcam.dist, view_msg);
+                         car.grounded ? "" : "   AIR", (sim.flags & 2) ? "   SKID" : "");
             else
-                snprintf(line, sizeof line, "%s   %s   FLY  eye %.0f %.0f %.0f   hscale %.2f",
-                         mission_path, mode == RENDER_SOFTWARE ? "SOFTWARE" : "HARDWARE",
-                         eye[0], eye[1], eye[2], HS[hs_idx]);
-            font_draw(font, line, fb, FB_W, FB_H, 8, 8, IDX_TEXT);
-            snprintf(line, sizeof line, "TIME %02d:00%s  phase %d  %s %.0f deg  I %.3f%s",
-                     wl.hour < 0 ? 12 : wl.hour, light_hour == scene->hour ? "" : " (L preview)",
-                     wl.phase, wl.is_day ? "SUN" : "MOON", wl.angle * 57.29578f, wl.intensity,
-                     mode == RENDER_SOFTWARE ? "   (SW: unlit)" : "");
-            font_draw(font, line, fb, FB_W, FB_H, 8, 20, IDX_TEXT);
-            font_draw(font, drive
-                      ? "DRIVE: KEYPAD ARROWS (input.map) or WASD   CAMERA: GREY ARROWS  PGUP/PGDN DIST  F2 TRACK   SPACE FLY  ESC"
-                      : "SPACE DRIVE/FLY  O ORBIT  L HOUR+3  WASD/ARROWS  SHIFT BOOST  P HSCALE  TAB SW/HW  ESC",
-                      fb, FB_W, FB_H, 8, FB_H - 16, IDX_DIM);
+                snprintf(line, sizeof line, "FLY   eye %.0f %.0f %.0f", eye[0], eye[1], eye[2]);
+            hud_text(font, fb, HUD_MARGIN, y, IDX_TEXT, line);
+            y += HUD_LINE;
+            snprintf(line, sizeof line, "%s   %s   TIME %02d:00 %s%s", mission_path, rmode,
+                     wl.hour < 0 ? 12 : wl.hour, wl.is_day ? "SUN" : "MOON",
+                     mode == RENDER_SOFTWARE ? "  (unlit)" : "");
+            hud_text(font, fb, HUD_MARGIN, y, IDX_DIM, line);
+            y += HUD_LINE;
+            if (drive && !orbit) {
+                snprintf(line, sizeof line, "camera pitch %.0f  yaw %.0f  dist %.1fx",
+                         tcam.pitch * 57.29578f, tcam.yaw * 57.29578f, tcam.dist);
+                hud_text(font, fb, HUD_MARGIN, y, IDX_DIM, line);
+                y += HUD_LINE;
+            }
+            if (HS[hs_idx] != 1.0f) {
+                snprintf(line, sizeof line, "terrain height x%.2f (debug)", HS[hs_idx]);
+                hud_text(font, fb, HUD_MARGIN, y, IDX_DIM, line);
+                y += HUD_LINE;
+            }
+            y += HUD_LINE / 2;
+
+            /* {key, action, 1 = viewer key (not the original's, drawn orange)} */
+            typedef struct { const char *key, *what; int dev; } HudKey;
+            static const HudKey FLY_KEYS[] = {
+                { "F", "drive the car", 1 }, { "W A S D", "move", 1 }, { "Q / E", "down / up", 1 },
+                { "ARROWS", "look", 1 }, { "SHIFT", "faster", 1 }, { "O", "orbit the car", 1 },
+                { "SHIFT+L", "time of day +3 h", 1 }, { "TAB", "software / Vulkan", 1 },
+                { "P", "terrain height (debug)", 1 }, { "ESC", "quit", 1 }, { NULL, NULL, 0 } };
+            static const HudKey DRIVE_KEYS[] = {
+                { "NUMPAD ARROWS", "throttle, brake, steer", 0 }, { "ARROW KEYS", "look around", 0 },
+                { "S", "engine on / off", 0 }, { "Z", "handbrake", 0 },
+                { ". / ,", "shift up / down", 0 }, { "TAB", "reverse direction", 0 },
+                { "PGUP / PGDN", "camera distance", 0 }, { "F1 - F11", "change view", 0 },
+                { "F", "fly", 1 }, { "O", "orbit the car", 1 },
+                { "SHIFT+L", "time of day +3 h", 1 }, { "ESC", "quit", 1 }, { NULL, NULL, 0 } };
+            static const HudKey ORBIT_KEYS[] = {
+                { "ARROWS / W A S D", "rotate", 1 }, { "Q / E", "zoom", 1 }, { "SHIFT", "faster", 1 },
+                { "O", "back", 1 }, { "ESC", "quit", 1 }, { NULL, NULL, 0 } };
+            const HudKey *keys = orbit ? ORBIT_KEYS : drive ? DRIVE_KEYS : FLY_KEYS;
+            for (int k = 0; keys[k].key; k++, y += HUD_LINE) {
+                hud_text(font, fb, HUD_MARGIN, y, keys[k].dev ? IDX_DEV : IDX_TEXT, keys[k].key);
+                hud_text(font, fb, HUD_MARGIN + HUD_KEY_COL, y, IDX_DIM, keys[k].what);
+            }
+            hud_text(font, fb, HUD_MARGIN, y + HUD_LINE / 2, IDX_DEV, "orange = viewer keys, not the original game's");
+            if (platform_get_ticks() < view_msg_until) {
+                static const char VIEW_MSG[] = "Only chase cam available in this version";
+                int w = font_text_width(font, VIEW_MSG) * HUD_SCALE;
+                hud_text(font, fb, (FB_W - w) / 2, FB_H / 3, IDX_TEXT, VIEW_MSG);
+            }
         }
 
         render_set_palette(pal_sw);
